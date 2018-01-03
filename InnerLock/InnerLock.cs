@@ -137,8 +137,8 @@ namespace InnerLock
 						otherIsPermaLock = partModule.Fields ["isPermaLock"].GetValue<bool> (partModule);
 					}
 					if (isActiveForAll || (isPermaLock & otherIsPermaLock)) {
-						foreach(Collider c in part.GetComponentsInChildren<Collider>())
-							foreach(Collider c2 in p.GetComponentsInChildren<Collider>())
+						foreach(Collider c in part.GetComponentsInChildren<Collider>()) // All colliders in this part
+							foreach(Collider c2 in p.GetComponentsInChildren<Collider>()) // All colliders in other part
 								Physics.IgnoreCollision (c, c2, false);
 					}
 				}

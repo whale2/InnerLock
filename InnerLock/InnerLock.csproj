@@ -8,8 +8,7 @@
     <OutputType>Library</OutputType>
     <RootNamespace>InnerLock</RootNamespace>
     <AssemblyName>InnerLock</AssemblyName>
-    <TargetFrameworkProfile>Profile78</TargetFrameworkProfile>
-    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -34,7 +33,7 @@
     <Compile Include="InnerLock.cs" />
     <Compile Include="LockMechanism.cs" />
   </ItemGroup>
-  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\Portable\$(TargetFrameworkVersion)\Microsoft.Portable.CSharp.targets" />
+  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
       <HintPath>..\..\..\ksp-versions\ksp-1.3.1-dev\KSP_Data\Managed\Assembly-CSharp.dll</HintPath>
