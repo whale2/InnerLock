@@ -60,7 +60,7 @@ namespace InnerLock
 
 		public override void OnStart (StartState state)
 		{
-			OnStart (state);
+			base.OnStart (state);
 			if (state != StartState.Editor) {
 				GameEvents.onVesselGoOffRails.Add (offRails);
 				GameEvents.onVesselGoOnRails.Add (onRails);
@@ -112,9 +112,10 @@ namespace InnerLock
 		}
 
 		public void OnCollisionEnter (Collision c)
-		{
-			if (isActive && !isLocked && !lockStarted)
+		{ 
+			if (isActive && !isLocked && !lockStarted) {
 				this.lockToLatch (c);
+			}
 		}
 
 		public void OnCollisionExit (Collision c)
@@ -135,38 +136,56 @@ namespace InnerLock
 			foreach(ContactPoint cp in c.contacts) {
 
 				Part p = cp.otherCollider.attachedRigidbody.GetComponent<Part> ();
-				if (p == null)
-					continue;
-			
-				if (!p.name.Equals(lockingTo))
+
+				if (!checkOtherHalf (p))
 					continue;
 
-				if (!canLockToOtherShip && p.vessel != vessel) {
-					Debug.Log ("LockMechanism: canLockToOtherShip = " + canLockToOtherShip + "; other vessel = " + p.vessel.name);
+				if (!checkRollAndDot (p))
 					continue;
-				}
-
-				float dotup = Vector3.Dot (cp.normal, transform.up);
-				float dotfwd = Math.Abs (Vector3.Dot (p.transform.forward, transform.forward));
-				float offset = Vector3.Distance (
-		               Vector3.ProjectOnPlane (transform.position, transform.up), 
-		               Vector3.ProjectOnPlane (p.transform.position, transform.up));
-	
-				if (-dotup < minRoll || dotfwd < minRoll || offset > minOffset) {
-							
-					if (!msgPosted) {
-						Debug.Log ("LockMechanism: dotup = " + dotup + "; dotfwd = " + dotfwd + "; offset = " + offset);
-						ScreenMessages.PostScreenMessage ("Latch not aligned - can't lock");
-						msgPosted = true;
-					}
-					break;
-				}
 
 				latchSlipped = false;
 				lockStarted = true;
 				lockHasp (p, false);
 				break;
 			}
+		}
+
+		private bool checkOtherHalf(Part otherPart) {
+
+			if (otherPart == null) {
+				return false;
+			}
+
+			if (!otherPart.name.Replace('.','_').Equals (lockingTo.Replace('.','_'))) {
+				return false;
+			}
+
+			if (!canLockToOtherShip && otherPart.vessel != vessel) {
+				Debug.Log ("LockMechanism: canLockToOtherShip = " + canLockToOtherShip + 
+					"; other vessel = " + otherPart.vessel.name);
+				return false;
+			}
+			return true;
+		}
+
+		private bool checkRollAndDot(Part otherPart) {
+
+			float dotup = Vector3.Dot (otherPart.transform.up, transform.up);
+			float dotfwd = Math.Abs (Vector3.Dot (otherPart.transform.forward, transform.forward));
+			float offset = Vector3.Distance (
+				Vector3.ProjectOnPlane (transform.position, transform.up), 
+				Vector3.ProjectOnPlane (otherPart.transform.position, transform.up));
+
+			if (-dotup < minRoll || dotfwd < minRoll || offset > minOffset) {
+
+				if (!msgPosted) {
+					Debug.Log ("LockMechanism: dotup = " + dotup + "; dotfwd = " + dotfwd + "; offset = " + offset);
+					ScreenMessages.PostScreenMessage ("Latch not aligned - can't lock");
+					msgPosted = true;
+				}
+				return false;
+			}
+			return true;
 		}
 
 		public void lockHasp (Part latch, bool isRelock)
