@@ -1,6 +1,7 @@
 ﻿using System;
 using UnityEngine;
 using System.Collections;
+using System.Diagnostics;
 
 namespace InnerLock
 {
@@ -9,19 +10,15 @@ namespace InnerLock
 
 		// Runtime parameters
 		[KSPField (isPersistant = true)]
-		public bool isActive = false;
-
-		[KSPField (isPersistant = true)]
 		public bool isLocked = false;
 
 		[KSPField (isPersistant = true)]
-		public uint latchPartId = 0;
+		public uint pairLockPartId = 0;
 
 		// Config parameters
 		[KSPField (isPersistant = true)]
 		public bool canLockToOtherShip = false;
 
-		// TODO: Implement free attaching magnet
 		[KSPField (isPersistant = true)]
 		public bool ecConstantDrain = false;
 
@@ -40,6 +37,12 @@ namespace InnerLock
 		[KSPField (isPersistant = true)]
 		public float minRoll = 0.99f;
 
+		[KSPField (isPersistant = true)]
+		public bool isSlave = false;
+
+		[KSPField (isPersistant = true)]
+		public bool isMaster = false;
+
 		// Runtime attributes
 		public FixedJoint lockJoint;
 
@@ -49,10 +52,12 @@ namespace InnerLock
 		public string unlockSoundPath = "InnerLock/Sounds/unlock";
 		public string lockSoundPath = "InnerLock/Sounds/lock";
 
-		// Runtime flags
+		// Runtime flags and vars
+		public bool isPrimed = false;
 		private bool latchSlipped = false;
 		private bool lockStarted = false;
 		private bool msgPosted = false;
+		private LockMechanism otherLock;
 		
 		public LockMechanism ()
 		{
@@ -72,26 +77,29 @@ namespace InnerLock
 			GameEvents.onVesselGoOffRails.Remove (offRails);
 			GameEvents.onVesselGoOnRails.Remove (onRails);
 		}
-
+			
 		[KSPEvent (guiName = "Disengage Lock", guiActive = true, guiActiveEditor = false, name = "disengageLock")]
 		public void disengageLock ()
 		{
-			isActive = true;
 			unlockHasp ();
-			Events ["engageLock"].active = true;
-			Events ["disengageLock"].active = false;
+			if (isMaster || isSlave) {
+				// There's a pair lock on the other end. Tell them to unlock;
+				otherLock.unlockHasp ();
+			}
 		}
 
 		[KSPEvent (guiName = "Engage Lock", guiActive = true, guiActiveEditor = false, name = "engageLock")]
 		public void engageLock ()
 		{
-			isActive = true;
+			isPrimed = true;
+			setEmissionColor (Color.red);
 			Events ["engageLock"].active = false;
 			Events ["disengageLock"].active = true;
 		}
 
 		public void onRails (Vessel v)
 		{
+			// ???
 			if (v != vessel)
 				return;
 			base.Events ["engageLock"].active = false;
@@ -100,26 +108,41 @@ namespace InnerLock
 
 		public void offRails (Vessel v)
 		{
+			// ???
 			if (v != vessel)
 				return;
-			Events ["engageLock"].active = !isActive;
-			Events ["disengageLock"].active = isActive;
-			if (isActive && isLocked && lockJoint == null && latchPartId != 0) {
-				Part part = FlightGlobals.FindPartByID (latchPartId);
+			Events ["engageLock"].active = !isLocked;
+			Events ["disengageLock"].active = isLocked;
+			Part otherLockPart = null;
+			if (isLocked && lockJoint == null && pairLockPartId != 0) {
+				otherLockPart = FlightGlobals.FindPartByID (pairLockPartId);
 				if (part != null)
 					lockHasp (part, true);
 			}
+			if (otherLockPart != null && (isMaster || isSlave)) {
+				if (otherLockPart.Modules.Contains ("LockMechanism")) {
+					otherLock = (LockMechanism)otherLockPart.Modules ["LockMechanism"];
+				} else {
+					printDebug("can't find LockMechanism module in part id " + pairLockPartId);
+				}
+			}
+			isPrimed = false;
+			latchSlipped = false;
+			lockStarted = false;
+			msgPosted = false;
 		}
 
 		public void OnCollisionEnter (Collision c)
-		{ 
-			if (isActive && !isLocked && !lockStarted) {
+		{
+			// Lock halves start touching each other. Activate locking mechanism
+			if (isPrimed && !isLocked && !lockStarted) {
 				this.lockToLatch (c);
 			}
-		}
+		}	
 
 		public void OnCollisionExit (Collision c)
 		{
+			// No more contact. Abort locking operation.
 			msgPosted = false;
 			latchSlipped = true;
 			lockStarted = false;
@@ -127,7 +150,8 @@ namespace InnerLock
 
 		public void OnCollisionStay (Collision c)
 		{
-			if (isActive && !isLocked && !lockStarted)
+			// Lock halves continue touching each other. Activate locking mechanism if not already done
+			if (isPrimed && !isLocked && !lockStarted)
 				this.lockToLatch (c);
 		}
 
@@ -137,9 +161,11 @@ namespace InnerLock
 
 				Part p = cp.otherCollider.attachedRigidbody.GetComponent<Part> ();
 
+				// Check if other part is suitable
 				if (!checkOtherHalf (p))
 					continue;
 
+				// Check if it is properly aligned 
 				if (!checkRollAndDot (p))
 					continue;
 
@@ -161,7 +187,7 @@ namespace InnerLock
 			}
 
 			if (!canLockToOtherShip && otherPart.vessel != vessel) {
-				Debug.Log ("LockMechanism: canLockToOtherShip = " + canLockToOtherShip + 
+				printDebug("canLockToOtherShip = " + canLockToOtherShip + 
 					"; other vessel = " + otherPart.vessel.name);
 				return false;
 			}
@@ -179,7 +205,7 @@ namespace InnerLock
 			if (-dotup < minRoll || dotfwd < minRoll || offset > minOffset) {
 
 				if (!msgPosted) {
-					Debug.Log ("LockMechanism: dotup = " + dotup + "; dotfwd = " + dotfwd + "; offset = " + offset);
+					printDebug ("dotup = " + dotup + "; dotfwd = " + dotfwd + "; offset = " + offset);
 					ScreenMessages.PostScreenMessage ("Latch not aligned - can't lock");
 					msgPosted = true;
 				}
@@ -190,70 +216,158 @@ namespace InnerLock
 
 		public void lockHasp (Part latch, bool isRelock)
 		{
-			Debug.Log ("LockMechanism: lockHasp; part = " + latch.name);
-			bool flag = !isRelock;
+			printDebug ("lockHasp; part = " + latch.name);
+			// If we're not restoring the state after timewarp/load, perform
+			// what it takes to lock the latch
 			if (!isRelock) {
 				float num = part.RequestResource ("ElectricCharge", this.ecConsumption);
 				if (num < this.ecConsumption) {
 					ScreenMessages.PostScreenMessage ("Not enough electric charge to lock the hasp!");
 					return;
 				}
-				if (lockSound == null)
-					lockSound = this.createAudio (base.part.gameObject, this.lockSoundPath);
-				this.lockSound.audio.Play ();
+				isSlave = false;
+				// If we use genderless locking, tell the other part that we are leading
+				if (latch.name == part.name && latch.Modules.Contains ("LockMechanism")) {
+					// Both locks could be primed. In that case assing master status
+					// to the part with lesser flightID
+					otherLock = (LockMechanism)latch.Modules ["LockMechanism"];
+					if (!otherLock.isPrimed || part.flightID < latch.flightID) {
+						printDebug ("acquiring master status");
+						otherLock.setSlaveLock (part.flightID);
+						isMaster = true;
+					} else {
+						printDebug ("submitting to slave status");
+						isSlave = true;
+					}
+				}
+					
+				if (!isSlave) {
+					if (lockSound == null)
+						lockSound = this.createAudio (base.part.gameObject, this.lockSoundPath);
+					this.lockSound.audio.Play ();
+				}
 			}
 			StartCoroutine (this.finalizeLock (latch, isRelock));
 		}
 
+		// Signalled by master about locking. Set flags
+		public void setSlaveLock(uint masterPartId) {
+			isSlave = true;
+			isPrimed = false;
+			isMaster = false;
+			pairLockPartId = masterPartId;
+			Part otherLockPart = FlightGlobals.FindPartByID (masterPartId);
+			otherLock = (LockMechanism)otherLockPart.Modules ["LockMechanism"];
+			Events ["engageLock"].active = false;
+		}
+
+		// Locking takes some time to complete. Set up joint after sound has done playing
 		public IEnumerator finalizeLock (Part latch, bool isRelock)
 		{
-			Debug.Log ("LockMechanism: finalize lock");
+			printDebug ("finalize lock");
+			pairLockPartId = latch.flightID;
 			if (!isRelock)
 				yield return new WaitForSeconds (lockSound.audio.clip.length);
-			
+
 			if (latchSlipped) {
+				printDebug ("latch slipped");
+				pairLockPartId = 0;
 				ScreenMessages.PostScreenMessage ("Latch slipped! Can't lock");
 				yield break;
 			}
 
-			Debug.Log ("LockMechanism: creating joint");
-			lockJoint = part.gameObject.AddComponent<FixedJoint> ();
-			lockJoint.connectedBody = latch.rb;
-			lockJoint.breakForce = lockStrength;
-			lockJoint.breakTorque = lockStrength;
-			Debug.Log ("LockMechanism: locked");
-			if (!isRelock)
-				ScreenMessages.PostScreenMessage ("Latch locked");
+			if (!isPrimed) {
+				// Disengaged during the lock
+				pairLockPartId = 0;
+				yield break;
+			}
 
-			latchPartId = latch.flightID;
-			lockStarted = false;
-			isLocked = true;
+			if (!isSlave) {
+				printDebug ("creating joint");
+				lockJoint = part.gameObject.AddComponent<FixedJoint> ();
+				lockJoint.connectedBody = latch.rb;
+				lockJoint.breakForce = lockStrength;
+				lockJoint.breakTorque = lockStrength;
+				printDebug ("locked");
+				if (!isRelock)
+					ScreenMessages.PostScreenMessage ("Latch locked");
+
+				// We're our own master for this call
+				finalizeLockByMasterRequest ();
+			}
+				
+			if (isMaster) {
+				otherLock.finalizeLockByMasterRequest ();
+			}
+			setEmissionColor (Color.green);
 		}
 
+		// Master signalled lock completion
+		public void finalizeLockByMasterRequest() {
+
+			lockStarted = false;
+			isLocked = true;
+			Events ["disengageLock"].active = true;
+		}
+
+		// Unlocking takes time as well
 		public void unlockHasp ()
 		{
+			Events ["disengageLock"].active = false;
+			isPrimed = false;
 			if (unlockSound == null)
 				unlockSound = createAudio (part.gameObject, unlockSoundPath);
 			
 			if (isLocked) {
-				unlockSound.audio.Play ();
+				if (!isSlave) {
+					// Not playing two sounds at once
+					unlockSound.audio.Play ();
+				}
 				StartCoroutine (finalizeUnlock ());
+			} else {
+				setEmissionColor (Color.black);
+				Events ["engageLock"].active = true;
 			}
 		}
 
-
 		private IEnumerator finalizeUnlock ()
 		{
-			Debug.Log ("LockMechanism: finalize unlock");
+			printDebug ("finalize unlock; master: " + isMaster + "; slave: " + isSlave);
 			yield return new WaitForSeconds (unlockSound.audio.clip.length);
-			Debug.Log ("LockMechanism: destroying joint");
-			Destroy (lockJoint);
+
+			printDebug ("destroying joint");
+			if (lockJoint != null) {
+				Destroy (lockJoint);
+			}
+			lockJoint = null;
 			isLocked = false;
-			isActive = false;
-			latchPartId = 0;
-			Debug.Log ("LockMechanism: unlocked");
+			isPrimed = false;
+			isMaster = false;
+			isSlave = false;
+			pairLockPartId = 0;
+			setEmissionColor (Color.black);
+			Events ["engageLock"].active = true;
+			printDebug ("LockMechanism: unlocked");
 		}
 
+		private void setEmissionColor(Color color) {
+
+			printDebug ("transform: " + part.transform.name);
+			printDebug ("body: " + gameObject.transform.Find ("Body"));
+			printDebug ("body: " + gameObject.transform.FindChild ("Body"));
+
+			Renderer [] renderers = gameObject.GetComponentsInChildren<Renderer> ();
+		
+			foreach (Renderer renderer in renderers) {
+				if (renderer != null) {
+					foreach (Material mat in renderer.materials) {
+						printDebug ("renderer=" + renderer + "; material=" + mat);
+						mat.SetColor ("_EmissionColor", color);
+						mat.SetColor ("_Color", color);
+					}
+				}
+			}
+		}
 
 		private FXGroup createAudio (GameObject obj, string audioPath)
 		{
@@ -273,10 +387,19 @@ namespace InnerLock
 				fXGroup.audio.clip = GameDatabase.Instance.GetAudioClip (audioPath);
 			}
 			else {
-				Debug.Log ("LockMechanism: No clip found with path " + audioPath);
+				printDebug ("No clip found with path " + audioPath);
 			}
 			return fXGroup;
 		}
+
+		internal void printDebug(String message) {
+
+			StackTrace trace = new StackTrace ();
+			String caller = trace.GetFrame(1).GetMethod ().Name;
+			int line = trace.GetFrame (1).GetFileLineNumber ();
+			print ("LockMechanism: " + caller + ":" + line + ": (part id=" + part.flightID + "): " + message);
+		}
+
 	}
 }
 
