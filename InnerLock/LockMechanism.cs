@@ -92,7 +92,7 @@ namespace InnerLock
 		public void engageLock ()
 		{
 			isPrimed = true;
-			setEmissionColor (Color.red);
+			setEmissiveColor (Color.yellow);
 			Events ["engageLock"].active = false;
 			Events ["disengageLock"].active = true;
 		}
@@ -111,21 +111,30 @@ namespace InnerLock
 			// ???
 			if (v != vessel)
 				return;
+
+			if (isLocked) {
+				setEmissiveColor (Color.green);
+			}
+			else {
+				setEmissiveColor (Color.black);
+			}
 			Events ["engageLock"].active = !isLocked;
 			Events ["disengageLock"].active = isLocked;
 			Part otherLockPart = null;
 			if (isLocked && lockJoint == null && pairLockPartId != 0) {
+				// If locked and there's no joint, we're restoring from save and joint
+				// must be re-created
+				printDebug ("restoring joint; pair=" + pairLockPartId + "; isMaster=" + isMaster);
 				otherLockPart = FlightGlobals.FindPartByID (pairLockPartId);
-				if (part != null)
-					lockHasp (part, true);
-			}
-			if (otherLockPart != null && (isMaster || isSlave)) {
-				if (otherLockPart.Modules.Contains ("LockMechanism")) {
-					otherLock = (LockMechanism)otherLockPart.Modules ["LockMechanism"];
-				} else {
-					printDebug("can't find LockMechanism module in part id " + pairLockPartId);
+				if (otherLockPart != null) {
+					// In case of genderless locking, get other part locking module
+					if ((isMaster || isSlave) && otherLockPart.Modules.Contains ("LockMechanism")) {
+						otherLock = (LockMechanism)otherLockPart.Modules ["LockMechanism"];
+					}
+					lockHasp (otherLockPart, true);
 				}
 			}
+
 			isPrimed = false;
 			latchSlipped = false;
 			lockStarted = false;
@@ -216,7 +225,7 @@ namespace InnerLock
 
 		public void lockHasp (Part latch, bool isRelock)
 		{
-			printDebug ("lockHasp; part = " + latch.name);
+			printDebug ("lockHasp; part = " + latch.name + "; id = " + latch.flightID + "; relock = " + isRelock);
 			// If we're not restoring the state after timewarp/load, perform
 			// what it takes to lock the latch
 			if (!isRelock) {
@@ -225,6 +234,7 @@ namespace InnerLock
 					ScreenMessages.PostScreenMessage ("Not enough electric charge to lock the hasp!");
 					return;
 				}
+				setEmissiveColor (Color.red);
 				isSlave = false;
 				// If we use genderless locking, tell the other part that we are leading
 				if (latch.name == part.name && latch.Modules.Contains ("LockMechanism")) {
@@ -264,7 +274,7 @@ namespace InnerLock
 		// Locking takes some time to complete. Set up joint after sound has done playing
 		public IEnumerator finalizeLock (Part latch, bool isRelock)
 		{
-			printDebug ("finalize lock");
+			printDebug ("finalize lock; other part=" + latch.flightID);
 			pairLockPartId = latch.flightID;
 			if (!isRelock)
 				yield return new WaitForSeconds (lockSound.audio.clip.length);
@@ -276,8 +286,9 @@ namespace InnerLock
 				yield break;
 			}
 
-			if (!isPrimed) {
+			if (!isPrimed && !isLocked) {
 				// Disengaged during the lock
+				printDebug("not primed and not locked");
 				pairLockPartId = 0;
 				yield break;
 			}
@@ -297,9 +308,10 @@ namespace InnerLock
 			}
 				
 			if (isMaster) {
+				printDebug ("master; otherLock id = " + otherLock.part.flightID);
 				otherLock.finalizeLockByMasterRequest ();
 			}
-			setEmissionColor (Color.green);
+			setEmissiveColor (Color.green);
 		}
 
 		// Master signalled lock completion
@@ -307,6 +319,7 @@ namespace InnerLock
 
 			lockStarted = false;
 			isLocked = true;
+			setEmissiveColor (Color.green);
 			Events ["disengageLock"].active = true;
 		}
 
@@ -319,13 +332,14 @@ namespace InnerLock
 				unlockSound = createAudio (part.gameObject, unlockSoundPath);
 			
 			if (isLocked) {
+				setEmissiveColor (Color.red);
 				if (!isSlave) {
 					// Not playing two sounds at once
 					unlockSound.audio.Play ();
 				}
 				StartCoroutine (finalizeUnlock ());
 			} else {
-				setEmissionColor (Color.black);
+				setEmissiveColor (Color.black);
 				Events ["engageLock"].active = true;
 			}
 		}
@@ -345,27 +359,17 @@ namespace InnerLock
 			isMaster = false;
 			isSlave = false;
 			pairLockPartId = 0;
-			setEmissionColor (Color.black);
+			setEmissiveColor (Color.black);
 			Events ["engageLock"].active = true;
-			printDebug ("LockMechanism: unlocked");
+			printDebug ("unlocked");
 		}
 
-		private void setEmissionColor(Color color) {
-
-			printDebug ("transform: " + part.transform.name);
-			printDebug ("body: " + gameObject.transform.Find ("Body"));
-			printDebug ("body: " + gameObject.transform.FindChild ("Body"));
-
-			Renderer [] renderers = gameObject.GetComponentsInChildren<Renderer> ();
+		private void setEmissiveColor(Color color) {
+			
+			Renderer renderer = gameObject.GetComponentInChildren<Renderer> ();
 		
-			foreach (Renderer renderer in renderers) {
-				if (renderer != null) {
-					foreach (Material mat in renderer.materials) {
-						printDebug ("renderer=" + renderer + "; material=" + mat);
-						mat.SetColor ("_EmissionColor", color);
-						mat.SetColor ("_Color", color);
-					}
-				}
+			if (renderer != null) {
+				renderer.material.SetColor ("_EmissiveColor", color);
 			}
 		}
 
