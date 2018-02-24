@@ -2,6 +2,7 @@
 using UnityEngine;
 using System.Collections;
 using System.Diagnostics;
+using System.Collections.Generic;
 
 namespace InnerLock
 {
@@ -16,32 +17,37 @@ namespace InnerLock
 		public uint pairLockPartId = 0;
 
 		// Config parameters
-		[KSPField (isPersistant = true)]
+		[KSPField]
 		public bool canLockToOtherShip = false;
 
-		[KSPField (isPersistant = true)]
+		[KSPField]
 		public bool ecConstantDrain = false;
 
-		[KSPField (isPersistant = true)]
+		[KSPField]
 		public float ecConsumption = 1f;
 
-		[KSPField (isPersistant = true)]
+		[KSPField]
 		public string lockingTo = "lockLatch";
 
-		[KSPField (isPersistant = true)]
+		[KSPField]
 		public float lockStrength = 50f;
 
-		[KSPField (isPersistant = true)]
-		public float minOffset = 0.01f;
+		[KSPField]
+		public float maxOffset = 0.01f;
 
-		[KSPField (isPersistant = true)]
-		public float minRoll = 0.99f;
+		[KSPField]
+		public float maxRollDeviation = 0.01f;
+
+		[KSPField]
+		public string allowedRolls = "0";
 
 		[KSPField (isPersistant = true)]
 		public bool isSlave = false;
 
 		[KSPField (isPersistant = true)]
 		public bool isMaster = false;
+
+		public float[] configuredRolls = { 0.0f };
 
 		// Runtime attributes
 		public FixedJoint lockJoint;
@@ -56,6 +62,7 @@ namespace InnerLock
 		public bool isPrimed = false;
 		private bool latchSlipped = false;
 		private bool lockStarted = false;
+		private bool unlockStarted = false;
 		private bool msgPosted = false;
 		private LockMechanism otherLock;
 		
@@ -69,13 +76,25 @@ namespace InnerLock
 			if (state != StartState.Editor) {
 				GameEvents.onVesselGoOffRails.Add (offRails);
 				GameEvents.onVesselGoOnRails.Add (onRails);
+				GameEvents.onPartJointBreak.Add (partJointBreak);
+				GameEvents.onJointBreak.Add (jointBreak);
+				GameEvents.onPartDie.Add (partDie);
 			}
+
+			List<float> rolls = new List<float> ();
+			foreach (string roll in allowedRolls.Split (',')) {
+				rolls.Add (float.Parse (roll.Trim ()));
+			}
+			printDebug ("allowed rolls: " + allowedRolls);
 		}
 
 		public void OnDestroy ()
 		{
 			GameEvents.onVesselGoOffRails.Remove (offRails);
 			GameEvents.onVesselGoOnRails.Remove (onRails);
+			GameEvents.onPartJointBreak.Remove (partJointBreak);
+			GameEvents.onJointBreak.Remove (jointBreak);
+			GameEvents.onPartDie.Remove (partDie);
 		}
 			
 		[KSPEvent (guiName = "Disengage Lock", guiActive = true, guiActiveEditor = false, name = "disengageLock")]
@@ -206,13 +225,24 @@ namespace InnerLock
 		private bool checkRollAndDot(Part otherPart) {
 
 			float dotup = Vector3.Dot (otherPart.transform.up, transform.up);
-			float dotfwd = Math.Abs (Vector3.Dot (otherPart.transform.forward, transform.forward));
+			float dotfwd = Vector3.Dot (otherPart.transform.forward, transform.forward);
 			float offset = Vector3.Distance (
 				Vector3.ProjectOnPlane (transform.position, transform.up), 
 				Vector3.ProjectOnPlane (otherPart.transform.position, transform.up));
 
-			if (-dotup < minRoll || dotfwd < minRoll || offset > minOffset) {
+			bool aligned = true;
+			if (-dotup < maxRollDeviation || offset > maxOffset) {
+				aligned = false;
+			}
 
+			foreach (float roll in allowedRolls) {
+				if (Math.Abs (dotfwd - roll) < maxRollDeviation) {
+					aligned = true;
+					break;
+				}
+			}
+
+			if (!aligned) {
 				if (!msgPosted) {
 					printDebug ("dotup = " + dotup + "; dotfwd = " + dotfwd + "; offset = " + offset);
 					ScreenMessages.PostScreenMessage ("Latch not aligned - can't lock");
@@ -234,7 +264,7 @@ namespace InnerLock
 					ScreenMessages.PostScreenMessage ("Not enough electric charge to lock the hasp!");
 					return;
 				}
-				setEmissiveColor (Color.red);
+				setEmissiveColor (Color.cyan);
 				isSlave = false;
 				// If we use genderless locking, tell the other part that we are leading
 				if (latch.name == part.name && latch.Modules.Contains ("LockMechanism")) {
@@ -268,6 +298,7 @@ namespace InnerLock
 			pairLockPartId = masterPartId;
 			Part otherLockPart = FlightGlobals.FindPartByID (masterPartId);
 			otherLock = (LockMechanism)otherLockPart.Modules ["LockMechanism"];
+			setEmissiveColor (Color.cyan);
 			Events ["engageLock"].active = false;
 		}
 
@@ -332,27 +363,34 @@ namespace InnerLock
 				unlockSound = createAudio (part.gameObject, unlockSoundPath);
 			
 			if (isLocked) {
-				setEmissiveColor (Color.red);
+				setEmissiveColor (Color.cyan);
 				if (!isSlave) {
 					// Not playing two sounds at once
 					unlockSound.audio.Play ();
 				}
-				StartCoroutine (finalizeUnlock ());
+				StartCoroutine (finalizeUnlock (false));
 			} else {
 				setEmissiveColor (Color.black);
 				Events ["engageLock"].active = true;
 			}
 		}
-
-		private IEnumerator finalizeUnlock ()
+			
+		private IEnumerator finalizeUnlock (bool broken)
 		{
-			printDebug ("finalize unlock; master: " + isMaster + "; slave: " + isSlave);
-			yield return new WaitForSeconds (unlockSound.audio.clip.length);
+			printDebug ("finalize unlock; master: " + isMaster + "; slave: " + isSlave + "; broken: " + broken);
+			unlockStarted = true;
+			if (!broken) {
+				yield return new WaitForSeconds (unlockSound.audio.clip.length);
+			}
 
-			printDebug ("destroying joint");
+			if ((isSlave || isMaster) && !otherLock.unlockStarted) {
+				StartCoroutine (otherLock.finalizeUnlock (true));
+			}
 			if (lockJoint != null) {
+				printDebug ("destroying joint");
 				Destroy (lockJoint);
 			}
+
 			lockJoint = null;
 			isLocked = false;
 			isPrimed = false;
@@ -360,8 +398,47 @@ namespace InnerLock
 			isSlave = false;
 			pairLockPartId = 0;
 			setEmissiveColor (Color.black);
+			Events ["disegageLock"].active = false;
 			Events ["engageLock"].active = true;
+			unlockStarted = false;
 			printDebug ("unlocked");
+		}
+
+		public void partJointBreak(PartJoint joint, float breakForce) {
+
+			if (joint.Parent != part) {
+				return;
+			}
+			// Seems like we just got separated from the vessel.
+			// Shut down actions taking into account that we might be still
+			// connected to other lock part
+			printDebug ("part joint broken");
+			Events ["engageLock"].active = false;
+			Events ["disengageLock"].active = false;
+		}
+
+		public void jointBreak(EventReport report) {
+			if (!isSlave) {
+				StartCoroutine (WaitAndCheckJoint ());
+			}
+		}
+
+		public void partDie(Part p) {
+			if (p != part) {
+				return;
+			}
+			if (isLocked && (isSlave || isMaster)) {
+				StartCoroutine (finalizeUnlock (true));
+			}
+		}
+
+		private IEnumerator WaitAndCheckJoint() {
+
+			yield return new WaitForFixedUpdate();
+			if (lockJoint == null) {
+				printDebug ("joint broken");
+				StartCoroutine (finalizeUnlock(true));
+			}
 		}
 
 		private void setEmissiveColor(Color color) {

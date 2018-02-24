@@ -1,0 +1,9 @@
+Placing this patch under GameData would result in:
+
+- Stock Cargo bays becoming switchable - should they generate collisions to all other parts. Beware of part clipping!
+- Stock Trusses becoming collideably to each other only
+
+Make your own patches in order to enable collisions on any other parts.
+
+isSwitchable parameter activates a collision switch in Editor
+isPermalock paramter activates collisions for this part with: a) part, that switched to be collideable in Editor and b) to other part with permalock
