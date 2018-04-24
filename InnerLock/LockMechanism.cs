@@ -107,6 +107,12 @@ namespace InnerLock
 			}
 		}
 
+		[KSPAction ("Disengage Lock", actionGroup = KSPActionGroup.None)]
+		public void actionDisenage(KSPActionParam param)
+		{
+			disengageLock();
+		}
+
 		[KSPEvent (guiName = "Engage Lock", guiActive = true, guiActiveEditor = false, name = "engageLock")]
 		public void engageLock ()
 		{
@@ -114,6 +120,25 @@ namespace InnerLock
 			setEmissiveColor (Color.yellow);
 			Events ["engageLock"].active = false;
 			Events ["disengageLock"].active = true;
+		}
+
+		[KSPAction("Engage Lock", actionGroup = KSPActionGroup.None)]
+		public void actionEngage(KSPActionParam param)
+		{
+			engageLock ();
+		}
+
+		[KSPAction("Toggle Lock", actionGroup = KSPActionGroup.None)]
+		public void actionToggle(KSPActionParam param)
+		{
+			if (lockStarted) {
+				return;
+			}
+			if (isPrimed || isLocked) {
+				disengageLock ();
+			} else {
+				engageLock ();
+			}
 		}
 
 		public void onRails (Vessel v)
@@ -310,7 +335,7 @@ namespace InnerLock
 			if (!isRelock)
 				yield return new WaitForSeconds (lockSound.audio.clip.length);
 
-			if (latchSlipped) {
+			if (!isRelock && latchSlipped) {
 				printDebug ("latch slipped");
 				pairLockPartId = 0;
 				ScreenMessages.PostScreenMessage ("Latch slipped! Can't lock");
@@ -398,7 +423,7 @@ namespace InnerLock
 			isSlave = false;
 			pairLockPartId = 0;
 			setEmissiveColor (Color.black);
-			Events ["disegageLock"].active = false;
+			Events ["disengageLock"].active = false;
 			Events ["engageLock"].active = true;
 			unlockStarted = false;
 			printDebug ("unlocked");
