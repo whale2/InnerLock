@@ -50,7 +50,9 @@ namespace InnerLock
 		public float[] configuredRolls = { 0.0f };
 
 		// Runtime attributes
-		public FixedJoint lockJoint;
+		public ConfigurableJoint lockJoint;
+		public AttachNode attachNode;
+		public PartJoint partJoint;
 
 		private FXGroup lockSound;
 		private FXGroup unlockSound;
@@ -351,10 +353,41 @@ namespace InnerLock
 
 			if (!isSlave) {
 				printDebug ("creating joint");
-				lockJoint = part.gameObject.AddComponent<FixedJoint> ();
+				lockJoint = part.gameObject.AddComponent<ConfigurableJoint> ();
 				lockJoint.connectedBody = latch.rb;
 				lockJoint.breakForce = lockStrength;
 				lockJoint.breakTorque = lockStrength;
+				lockJoint.xMotion = ConfigurableJointMotion.Locked;
+				lockJoint.yMotion = ConfigurableJointMotion.Locked;
+				lockJoint.zMotion = ConfigurableJointMotion.Locked;
+				lockJoint.angularXMotion = ConfigurableJointMotion.Locked;
+				lockJoint.angularYMotion = ConfigurableJointMotion.Locked;
+				lockJoint.angularZMotion = ConfigurableJointMotion.Locked;
+				lockJoint.linearLimit = new SoftJointLimit { bounciness = 0.9f, contactDistance = 0, limit = 0.01f };
+				lockJoint.linearLimitSpring = new SoftJointLimitSpring { damper = 10000, spring = 0 };
+				lockJoint.projectionMode = JointProjectionMode.PositionAndRotation;
+				lockJoint.projectionDistance = 0;
+				lockJoint.projectionAngle = 0;
+				lockJoint.targetPosition = latch.transform.position;
+				lockJoint.anchor = latch.transform.position;
+
+				printDebug ("creating attachNode");
+
+				Vector3 normDir = (part.transform.position - latch.transform.position).normalized;
+				
+
+				attachNode = new AttachNode {id = Guid.NewGuid().ToString(), attachedPart = latch};
+				attachNode.breakingForce = lockStrength;
+				attachNode.breakingTorque = lockStrength;
+				attachNode.position = latch.partTransform.InverseTransformPoint(latch.partTransform.position);
+				attachNode.orientation = latch.partTransform.InverseTransformDirection(normDir);
+				attachNode.size = 1;
+				attachNode.ResourceXFeed = false;
+				attachNode.attachMethod = AttachNodeMethod.FIXED_JOINT;
+				part.attachNodes.Add(attachNode);
+				attachNode.owner = part;
+				partJoint = PartJoint.Create(part, latch, attachNode, null, AttachModes.SRF_ATTACH);
+
 				printDebug ("locked");
 				if (!isRelock)
 					ScreenMessages.PostScreenMessage ("Latch locked");
@@ -368,6 +401,14 @@ namespace InnerLock
 				otherLock.finalizeLockByMasterRequest ();
 			}
 			setEmissiveColor (Color.green);
+		}
+
+		public FixedJoint createJoint(Part target) {
+			FixedJoint joint = part.gameObject.AddComponent<FixedJoint> ();
+			joint.connectedBody = target.rb;
+			joint.breakForce = lockStrength;
+			joint.breakTorque = lockStrength;
+			return joint;
 		}
 
 		// Master signalled lock completion
@@ -413,10 +454,16 @@ namespace InnerLock
 			}
 			if (lockJoint != null) {
 				printDebug ("destroying joint");
-				Destroy (lockJoint);
+				DestroyImmediate (lockJoint);
+				partJoint.DestroyJoint();
+				if (attachNode != null) {
+					part.attachNodes.Remove (attachNode);
+				}
+				attachNode.owner = null;
 			}
 
 			lockJoint = null;
+			attachNode = null;
 			isLocked = false;
 			isPrimed = false;
 			isMaster = false;
@@ -434,12 +481,17 @@ namespace InnerLock
 			if (joint.Parent != part) {
 				return;
 			}
+			if (joint == lockJoint) {
+				// disconnected from other lock. It's allright
+				return;
+			}
 			// Seems like we just got separated from the vessel.
 			// Shut down actions taking into account that we might be still
 			// connected to other lock part
 			printDebug ("part joint broken");
 			Events ["engageLock"].active = false;
 			Events ["disengageLock"].active = false;
+			setEmissiveColor (Color.black);
 		}
 
 		public void jointBreak(EventReport report) {
@@ -460,7 +512,7 @@ namespace InnerLock
 		private IEnumerator WaitAndCheckJoint() {
 
 			yield return new WaitForFixedUpdate();
-			if (lockJoint == null) {
+			if (partJoint == null) {
 				printDebug ("joint broken");
 				StartCoroutine (finalizeUnlock(true));
 			}
