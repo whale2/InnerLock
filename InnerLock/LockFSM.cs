@@ -56,7 +56,7 @@ namespace InnerLock
         
         public void processEvent(Event e)
         {
-            var action = fsm[(int) this.state, (int) e];
+            Action action = fsm[(int) this.state, (int) e];
             if (action != null)
             {
                 action.Invoke();
@@ -125,6 +125,5 @@ namespace InnerLock
             state = State.Broken;
             act("Break");
         }
-        
     }
 }
