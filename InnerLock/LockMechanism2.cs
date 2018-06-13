@@ -87,11 +87,15 @@ namespace InnerLock
             printDebug ("allowed rolls: " + allowedRolls);
             
             lockFSM = new LockFSM((LockFSM.State)lockFSMState);
-            lockFSM.actionDelegates.Add("Engage", engageLock);
-            lockFSM.actionDelegates.Add("Disengage", disengageLock);
+            lockFSM.actionDelegates.Add("Engage", defaultPostEventAction);
+            lockFSM.actionDelegates.Add("Disengage", defaultPostEventAction);
             lockFSM.actionDelegates.Add("Lock", lockToLatch);
-            lockFSM.actionDelegates.Add("Locked", finalizeLock);
+            lockFSM.actionDelegates.Add("Locked", defaultPostEventAction);
             lockFSM.actionDelegates.Add("Slip", latchSlip);
+            lockFSM.actionDelegates.Add("Unlock", unlockHasp);
+            lockFSM.actionDelegates.Add("Release", defaultPostEventAction);
+            lockFSM.actionDelegates.Add("Unlocked", defaultPostEventAction);
+            lockFSM.actionDelegates.Add("Break", defaultPostEventAction);
         }
 
         public void OnDestroy ()
@@ -104,27 +108,29 @@ namespace InnerLock
         }
 
         // Menu event handler
-        [KSPEvent(guiName = "Disengage Lock", guiActive = true, guiActiveEditor = false, name = "disengageLock")]
+        [KSPEvent(guiName = "Disengage Lock", guiActive = true, guiActiveEditor = false, name = "eventDisengage")]
         public void eventDisengage()
         {
             lockFSM.processEvent(LockFSM.Event.Disengage);
         }
         
         // Action group handler
-        [KSPAction ("Disengage Lock", actionGroup = KSPActionGroup.None)]
+        [KSPAction ("Disengage Lock/Unlock", actionGroup = KSPActionGroup.None)]
         public void actionDisenage(KSPActionParam param)
         {
-            lockFSM.processEvent(LockFSM.Event.Disengage);
-        }
-        
-        public void disengageLock ()
-        {
-            setEmissiveColor ();
-            setMenuEvents();
+            // Send unlock event if in locked state, disengage otherwise
+            if (lockFSM.state == LockFSM.State.Locked)
+            {
+                eventDisengage();
+            }
+            else
+            {
+                eventUnlock();
+            }
         }
         
         // Menu event handler
-        [KSPEvent (guiName = "Engage Lock", guiActive = true, guiActiveEditor = false, name = "engageLock")]
+        [KSPEvent (guiName = "Engage Lock", guiActive = true, guiActiveEditor = false, name = "eventEngage")]
         public void eventEngage ()
         {
             lockFSM.processEvent(LockFSM.Event.Engage);
@@ -137,20 +143,31 @@ namespace InnerLock
             lockFSM.processEvent(LockFSM.Event.Engage);
         }
 
-        public void engageLock()
-        {
-            setEmissiveColor ();
-            setMenuEvents();
-        }
-
         // Action group handler for toggling lock on and off
         [KSPAction("Toggle Lock", actionGroup = KSPActionGroup.None)]
         public void actionToggle(KSPActionParam param)
         {
-            // Send unlock event if in locked state, disengage otherwise
-            // We just fire the event, FSM will sort out the proper reaction
-            lockFSM.processEvent(lockFSM.state == LockFSM.State.Locked ? 
-                LockFSM.Event.Unlock : LockFSM.Event.Disengage);
+            switch (lockFSM.state)
+            {
+                case LockFSM.State.Locked:
+                    eventUnlock();
+                    break;
+                case LockFSM.State.Ready:
+                case LockFSM.State.Locking:
+                    eventDisengage();
+                    break;
+                case LockFSM.State.Idle:
+                    eventEngage();
+                    break;
+            }
+        }
+        
+        // Menu enevt handler
+        [KSPEvent(guiName = "Unlock", guiActive = true, guiActiveEditor = false, name = "eventUnlock")]
+        public void eventUnlock()
+        {
+            lockFSM.processEvent(LockFSM.Event.Unlock);
+            processCounterpart(LockFSM.Event.Unlock);
         }
 
         //  Railing and derailing stuff
@@ -168,14 +185,14 @@ namespace InnerLock
                 lockFSM.processEvent(LockFSM.Event.Release);
             }
             // Just hide the menu buttons
-            Events ["engageLock"].active = false;
-            Events ["disengageLock"].active = false;
+            Events ["eventEngage"].active = false;
+            Events ["eventDisengage"].active = false;
+            Events ["eventUnlock"].active = false;
         }
 
         public void offRails (Vessel v)
         {
-            setEmissiveColor ();
-            setMenuEvents();
+            defaultPostEventAction();
             
             if (lockFSM.state == LockFSM.State.Locked && lockJoint == null && pairLockPartId != 0) {
                 // If locked and there's no joint, we're restoring from save and joint
@@ -187,7 +204,7 @@ namespace InnerLock
                     if ((isMaster || isSlave) && otherLockPart.Modules.Contains ("LockMechanism2")) {
                         otherLock = (LockMechanism2)otherLockPart.Modules ["LockMechanism2"];
                     }
-                    lockHasp (otherLockPart, true);
+                    lockHasp (otherLockPart);
                 }
             }
 
@@ -289,17 +306,18 @@ namespace InnerLock
 
         public void lockToLatch()
         {
-            setEmissiveColor();
-            setMenuEvents();
-            lockHasp(otherLockPart, false);
+            defaultPostEventAction();
+            printDebug($"other lock part = {otherLockPart.flightID}");
+            lockHasp(otherLockPart);
         }
         
-        public void lockHasp (Part latch, bool isRelock)
+        public void lockHasp (Part latch)
         {
-            printDebug ("lockHasp; part = " + latch.name + "; id = " + latch.flightID + "; relock = " + isRelock);
+            printDebug ($"part={latch.name}; id={latch.flightID}; fsm state={lockFSM.state}");
             // If we're not restoring the state after timewarp/load, perform
             // what it takes to lock the latch
-            if (!isRelock) {
+            if (lockFSM.state == LockFSM.State.Locking)
+            {
                 float num = part.RequestResource ("ElectricCharge", ecConsumption);
                 if (num < ecConsumption) {
                     ScreenMessages.PostScreenMessage ("Not enough electric charge to lock the hasp!");
@@ -311,7 +329,8 @@ namespace InnerLock
                     // Both locks could be primed. In that case assing master status
                     // to the part with lesser flightID
                     otherLock = (LockMechanism2)latch.Modules ["LockMechanism2"];
-                    if (part.flightID < latch.flightID) {
+                    printDebug($"our fsm state = {lockFSM.state}, other fsm state = {otherLock.lockFSM.state}");
+                    if (otherLock.lockFSM.state != LockFSM.State.Locking || part.flightID < latch.flightID) {
                         printDebug ("acquiring master status");
                         otherLock.setSlaveLock (part.flightID);
                         isMaster = true;
@@ -327,17 +346,19 @@ namespace InnerLock
                     lockSound.audio.Play ();
                 }
             }
-            StartCoroutine (finalizeLock (latch, isRelock));
+            StartCoroutine (finalizeLock (latch));
         }
         
         // Signalled by master about locking. Set flags
 		public void setSlaveLock(uint masterPartId) {
+		    printDebug($"setting slave lock by request from {masterPartId}");
 			isSlave = true;
 			isMaster = false;
 			pairLockPartId = masterPartId;
-			Part otherLockPart = FlightGlobals.FindPartByID (masterPartId);
+			otherLockPart = FlightGlobals.FindPartByID (masterPartId);
 			otherLock = (LockMechanism2)otherLockPart.Modules ["LockMechanism2"];
-			lockFSM.processEvent(LockFSM.Event.Lock);
+		    lockFSM.state = LockFSM.State.Locking;
+		    defaultPostEventAction();
 		}
 
         public void latchSlip()
@@ -345,18 +366,21 @@ namespace InnerLock
             printDebug ("latch slipped");
             pairLockPartId = 0;
             ScreenMessages.PostScreenMessage ("Latch slipped! Can't lock");
+            defaultPostEventAction();
         }
 
 		// Locking takes some time to complete. Set up joint after sound has done playing
-		public IEnumerator finalizeLock (Part latch, bool isRelock)
+		public IEnumerator finalizeLock (Part latch)
 		{
-			printDebug ("finalize lock; other part=" + latch.flightID);
+			printDebug ($"finalize lock; other part={latch.flightID}, fsm state={lockFSM.state}");
 			pairLockPartId = latch.flightID;
-			if (!isRelock)
-				yield return new WaitForSeconds (lockSound.audio.clip.length);
-
-			
-			if (lockFSM.state != LockFSM.State.Locking) {
+			if (lockFSM.state == LockFSM.State.Locking) {
+			    printDebug ("finalize lock; sleeping");
+				WaitForSeconds wfs = new WaitForSeconds (lockSound.audio.clip.length);
+			    printDebug ($"finalize lock; yielding {wfs}");
+			    yield return wfs;
+			}
+			else if (lockFSM.state != LockFSM.State.Locked) {
 				// Disengaged during the lock
 				printDebug("state is not 'locking', aborting");
 				pairLockPartId = 0;
@@ -401,18 +425,113 @@ namespace InnerLock
 				partJoint = PartJoint.Create(part, latch, attachNode, null, AttachModes.SRF_ATTACH);
 
 				printDebug ("locked");
-				if (!isRelock)
+				if (lockFSM.state == LockFSM.State.Locking)
 					ScreenMessages.PostScreenMessage ("Latch locked");
 
 			}
 				
 			if (isMaster) {
 				printDebug ("master; otherLock id = " + otherLock.part.flightID);
+			    // Sort of hack - other lock can be in almost any state except Broken 
+			    otherLock.lockFSM.state = LockFSM.State.Locked;
+			    otherLock.defaultPostEventAction();
 			}
             lockFSM.processEvent(LockFSM.Event.Lock);
-
 		}
 
+        // Unlocking takes time as well
+        public void unlockHasp ()
+        {
+            setEmissiveColor();
+            setMenuEvents();
+            if (unlockSound == null)
+                unlockSound = createAudio (part.gameObject, unlockSoundPath);
+			
+            if (!isSlave) {
+                // Not playing two sounds at once
+                unlockSound.audio.Play ();
+            }
+            StartCoroutine (finalizeUnlock (false));
+        }
+			
+        private IEnumerator finalizeUnlock (bool broken)
+        {
+            printDebug ("finalize unlock; master: " + isMaster + "; slave: " + isSlave + "; broken: " + broken);
+            if (!broken) {
+                yield return new WaitForSeconds (unlockSound.audio.clip.length);
+            }
+
+            if ((isSlave || isMaster) && otherLock.lockFSM.state != LockFSM.State.Unlocking) {
+                StartCoroutine (otherLock.finalizeUnlock (true));
+            }
+            if (lockJoint != null) {
+                printDebug ("destroying joint");
+                DestroyImmediate (lockJoint);
+                partJoint.DestroyJoint();
+                if (attachNode != null) {
+                    part.attachNodes.Remove (attachNode);
+                    attachNode.owner = null;
+                }
+            }
+
+            lockJoint = null;
+            attachNode = null;
+            isMaster = false;
+            isSlave = false;
+            pairLockPartId = 0;
+            lockFSM.processEvent(LockFSM.Event.Release);
+        }
+
+        // TODO: Lock stopped breaking - check all this!
+        public void partJointBreak(PartJoint joint, float breakForce) {
+
+            if (joint.Parent != part) {
+                return;
+            }
+            if (lockJoint == null || joint == lockJoint) {
+                // disconnected from other lock. It's allrighty
+                return;
+            }
+            // Seems like we just got separated from the vessel.
+            // Shut down actions taking into account that we might be still
+            // connected to other lock part
+            printDebug ($"broken join: {joint}, lock joint: {lockJoint}; part joint broken");
+            lockFSM.processEvent(LockFSM.Event.Break);
+        }
+
+        public void jointBreak(EventReport report) {
+            if (!isSlave) {
+                StartCoroutine (waitAndCheckJoint ());
+            }
+        }
+
+        public void partDie(Part p) {
+            if (p != part) {
+                return;
+            }
+            if (lockFSM.state == LockFSM.State.Locked) {
+                StartCoroutine (finalizeUnlock (true));
+            }
+        }
+        
+        private IEnumerator waitAndCheckJoint() {
+
+            yield return new WaitForFixedUpdate();
+            if (partJoint == null) {
+                printDebug ("joint broken");
+                StartCoroutine (finalizeUnlock(true));
+            }
+        }
+
+        // Utility methods
+        public void defaultPostEventAction()
+        {
+            printDebug(String.Format("fsm state = {0}", lockFSM.state));
+            lockFSMState = (uint) lockFSM.state;
+            setEmissiveColor();
+            setMenuEvents();
+        }
+        
         public FixedJoint createJoint(Part target) {
             FixedJoint joint = part.gameObject.AddComponent<FixedJoint> ();
             joint.connectedBody = target.rb;
@@ -420,45 +539,44 @@ namespace InnerLock
             joint.breakTorque = lockStrength;
             return joint;
         }
-
-        // Master signalled lock completion
-        public void finalizeLock() {
-
-            setEmissiveColor();
-            setMenuEvents();
-        }
-
-        // Utility methods
+        
         private void setMenuEvents()
         {
             switch (lockFSM.state)
             {
                 case LockFSM.State.Idle:
-                    Events["engageLock"].active = true;
-                    Events["disengageLock"].active = false;
-                    Events["unlockLock"].active = false;
+                    Events["eventEngage"].active = true;
+                    Events["eventDisengage"].active = false;
+                    Events["eventUnlock"].active = false;
                     break;
                 
                 case LockFSM.State.Ready:
                 case LockFSM.State.Locking:
-                    Events["engageLock"].active = false;
-                    Events["disengageLock"].active = true;
-                    Events["unlockLock"].active = false;
+                    Events["eventEngage"].active = false;
+                    Events["eventDisengage"].active = true;
+                    Events["eventUnlock"].active = false;
                     break;
                 
                 case LockFSM.State.Locked:
-                    Events["engageLock"].active = false;
-                    Events["disengageLock"].active = false;
-                    Events["unlockLock"].active = true;
+                    Events["eventEngage"].active = false;
+                    Events["eventDisengage"].active = false;
+                    Events["eventUnlock"].active = true;
                     break;
                 
                 case LockFSM.State.Unlocking:
                 case LockFSM.State.Broken:
-                    Events["engageLock"].active = false;
-                    Events["disengageLock"].active = false;
-                    Events["unlockLock"].active = false;
+                    Events["eventEngage"].active = false;
+                    Events["eventDisengage"].active = false;
+                    Events["eventUnlock"].active = false;
                     break;
-                
+            }
+        }
+        
+        private void processCounterpart(LockFSM.Event fsmEvent)
+        {
+            if (otherLock && (isMaster || isSlave))
+            {
+                otherLock.lockFSM.processEvent(fsmEvent);
             }
         }
         

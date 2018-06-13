@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace InnerLock
 {
@@ -65,6 +66,7 @@ namespace InnerLock
 
         private void act(String actionName)
         {
+            Debug.Log(String.Format("lock FSM: processing action: {0}", actionName));
             Action action;
             if (actionDelegates.TryGetValue(actionName, out action))
             {
@@ -99,12 +101,6 @@ namespace InnerLock
         public void Disengage()
         {
             state = State.Idle;
-
-            if (state == State.Locking)
-            {
-                act("CancelLocking");
-            }
-            
             act("Disengage");
         }
 
