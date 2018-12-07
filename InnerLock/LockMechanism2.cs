@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using CompoundParts;
 using UnityEngine;
 
 namespace InnerLock
@@ -207,6 +208,8 @@ namespace InnerLock
                     lockHasp (otherLockPart);
                 }
             }
+            // Temporarily make joint unbreakable
+            StartCoroutine(magicPower());
 
             msgPosted = false;
         }
@@ -215,7 +218,8 @@ namespace InnerLock
         public void OnCollisionEnter (Collision c)
         {
             // Lock halves start touching each other. Send Contact event to FSM
-            if (checkCollision(c))
+            // But stop checks if collision fired when the lock is in the state from which it can't transit anywhere else 
+            if (lockFSM.canTransit(LockFSM.Event.Contact) && checkCollision(c))
             {
                 lockFSM.processEvent(LockFSM.Event.Contact);
             }
@@ -231,7 +235,8 @@ namespace InnerLock
         public void OnCollisionStay (Collision c)
         {
             // Lock halves continue touching each other. Activate locking mechanism if not already done
-            if (checkCollision(c))
+            // But stop checks if collision fired when the lock is in the state from which it can't transit anywhere else 
+            if (lockFSM.canTransit(LockFSM.Event.Contact) && checkCollision(c))
             {
                 lockFSM.processEvent(LockFSM.Event.Contact);
             }
@@ -366,6 +371,7 @@ namespace InnerLock
             printDebug ("latch slipped");
             pairLockPartId = 0;
             ScreenMessages.PostScreenMessage ("Latch slipped! Can't lock");
+            lockFSM.state = LockFSM.State.Ready;
             defaultPostEventAction();
         }
 
@@ -387,6 +393,14 @@ namespace InnerLock
 				yield break;
 			}
 
+		    // At this point the latch could have slipped, because we waited for some time.
+		    // Check if FSM state is still "locking"
+		    if (lockFSM.state != LockFSM.State.Locking && lockFSM.state != LockFSM.State.Locked)
+		    {
+		        printDebug("Latch slipped while locking. Aborting lock.");
+		        yield break;
+		    }
+		    
 			if (!isSlave) {
 				printDebug ("creating joint");
 				lockJoint = part.gameObject.AddComponent<ConfigurableJoint> ();
@@ -400,18 +414,16 @@ namespace InnerLock
 				lockJoint.angularYMotion = ConfigurableJointMotion.Locked;
 				lockJoint.angularZMotion = ConfigurableJointMotion.Locked;
 				lockJoint.linearLimit = new SoftJointLimit { bounciness = 0.9f, contactDistance = 0, limit = 0.01f };
-				lockJoint.linearLimitSpring = new SoftJointLimitSpring { damper = 10000, spring = 0 };
+				lockJoint.linearLimitSpring = new SoftJointLimitSpring { damper = 1000, spring = 500 };
 				lockJoint.projectionMode = JointProjectionMode.PositionAndRotation;
-				lockJoint.projectionDistance = 0;
+				lockJoint.projectionDistance = 0.1f;
 				lockJoint.projectionAngle = 0;
 				lockJoint.targetPosition = latch.transform.position;
 				lockJoint.anchor = latch.transform.position;
 
 				printDebug ("creating attachNode");
-
 				Vector3 normDir = (part.transform.position - latch.transform.position).normalized;
 				
-
 				attachNode = new AttachNode {id = Guid.NewGuid().ToString(), attachedPart = latch};
 				attachNode.breakingForce = lockStrength;
 				attachNode.breakingTorque = lockStrength;
@@ -420,14 +432,13 @@ namespace InnerLock
 				attachNode.size = 1;
 				attachNode.ResourceXFeed = false;
 				attachNode.attachMethod = AttachNodeMethod.FIXED_JOINT;
-				part.attachNodes.Add(attachNode);
+				//part.attachNodes.Add(attachNode);
 				attachNode.owner = part;
 				partJoint = PartJoint.Create(part, latch, attachNode, null, AttachModes.SRF_ATTACH);
 
 				printDebug ("locked");
 				if (lockFSM.state == LockFSM.State.Locking)
 					ScreenMessages.PostScreenMessage ("Latch locked");
-
 			}
 				
 			if (isMaster) {
@@ -436,6 +447,13 @@ namespace InnerLock
 			    otherLock.lockFSM.state = LockFSM.State.Locked;
 			    otherLock.defaultPostEventAction();
 			}
+		    
+		    printDebug($"part breaking force: {part.breakingForce}, own partJoint breaking force: {part.attachJoint.Joint.breakForce}");
+		    foreach (var joint in part.attachJoint.joints)
+		    {
+		        printDebug($"other joints: {joint}, rb:{joint.connectedBody}, anchor: {joint.connectedAnchor}");
+		    }
+		    
             lockFSM.processEvent(LockFSM.Event.Lock);
 		}
 
@@ -464,14 +482,23 @@ namespace InnerLock
             if ((isSlave || isMaster) && otherLock.lockFSM.state != LockFSM.State.Unlocking) {
                 StartCoroutine (otherLock.finalizeUnlock (true));
             }
+
+            if (lockFSM.state == LockFSM.State.Unlocking)
+            {
+                // Process Unlocked event before destroying joint
+                lockFSM.processEvent(LockFSM.Event.Release);
+            }
+            
             if (lockJoint != null) {
                 printDebug ("destroying joint");
-                DestroyImmediate (lockJoint);
                 partJoint.DestroyJoint();
                 if (attachNode != null) {
-                    part.attachNodes.Remove (attachNode);
+                    //part.attachNodes.Remove (attachNode);
                     attachNode.owner = null;
                 }
+                DestroyImmediate (lockJoint);
+                printDebug(String.Format("Done destroying: lockJoint={0}, attachNode={1}, partJoint={2}", 
+                    lockJoint, attachNode, partJoint));
             }
 
             lockJoint = null;
@@ -479,28 +506,38 @@ namespace InnerLock
             isMaster = false;
             isSlave = false;
             pairLockPartId = 0;
-            lockFSM.processEvent(LockFSM.Event.Release);
         }
 
-        // TODO: Lock stopped breaking - check all this!
+        // TODO: Too much events and handlers for join break - they do unneeded work
         public void partJointBreak(PartJoint joint, float breakForce) {
-
-            if (joint.Parent != part) {
+            // the lock got broken off of the part it was connected to.
+            // Should we destroy joint lock as well, or should it be left dangling?
+            printDebug($"broken joint parent={joint.Parent.flightID}; our id={part.flightID}; force={breakForce}");
+            if (joint.Parent != part && otherLock != null && joint.Parent != otherLock.part) {
+                // something has got broken, but not our joints
                 return;
             }
-            if (lockJoint == null || joint == lockJoint) {
-                // disconnected from other lock. It's allrighty
-                return;
-            }
+//            if (lockJoint == null || joint == lockJoint) {
+//                // disconnected from other lock. It's allrighty
+//                printDebug("lockJoint is null, doing nothing");
+//                return;
+//            }
             // Seems like we just got separated from the vessel.
             // Shut down actions taking into account that we might be still
             // connected to other lock part
-            printDebug ($"broken join: {joint}, lock joint: {lockJoint}; part joint broken");
-            lockFSM.processEvent(LockFSM.Event.Break);
+            printDebug ($"broken joint: {joint}, lock joint: {lockJoint}; part joint broken");
+            if (breakForce > 0)
+            {
+                // Zero breaking force (hopefully) means joint destroyed intentionally
+                lockFSM.processEvent(LockFSM.Event.Break);
+            }
         }
 
         public void jointBreak(EventReport report) {
+            // Check if the broken joint is our lock joint
+            printDebug($"report={report}");
             if (!isSlave) {
+                printDebug("not slave - starting waitAndCheckJoint()");
                 StartCoroutine (waitAndCheckJoint ());
             }
         }
@@ -517,10 +554,37 @@ namespace InnerLock
         private IEnumerator waitAndCheckJoint() {
 
             yield return new WaitForFixedUpdate();
-            if (partJoint == null) {
-                printDebug ("joint broken");
+            if (lockJoint == null) {
+                printDebug ("lock joint broken");
                 StartCoroutine (finalizeUnlock(true));
             }
+        }
+
+        private IEnumerator magicPower()
+        {
+            if (partJoint == null)
+            {
+                yield break;
+            }
+            printDebug("Setting inf breaking force");
+            part.attachJoint.SetBreakingForces(Mathf.Infinity, Mathf.Infinity);
+            partJoint.SetBreakingForces(Mathf.Infinity, Mathf.Infinity);
+            attachNode.breakingForce = Mathf.Infinity;
+            attachNode.breakingTorque = Mathf.Infinity;
+            lockJoint.breakForce = Mathf.Infinity;
+            lockJoint.breakTorque = Mathf.Infinity;
+            yield return new WaitForSeconds(3);
+
+            printDebug("Restoring normal breaking force");
+            float originalBreakingForce = part.breakingForce;
+            float originalBreakingTorque = part.breakingTorque;
+            partJoint.SetBreakingForces(lockStrength, lockStrength);
+            attachNode.breakingForce = lockStrength;
+            attachNode.breakingTorque = lockStrength;
+            lockJoint.breakForce = lockStrength;
+            lockJoint.breakTorque = lockStrength;
+            part.attachJoint.SetBreakingForces(originalBreakingForce, originalBreakingTorque);
+            printDebug($"Done restoring breaking force: f={originalBreakingForce}, t={originalBreakingTorque}");
         }
 
         // Utility methods
