@@ -2,3 +2,8 @@
 *.userprefs
 InnerLock/InnerLock/bin/*
 InnerLock/InnerLock/obj/*
+bin
+obj
+.idea
+*.zip
+*DotSettings.user

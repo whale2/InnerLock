@@ -30,14 +30,13 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="LockFSM.cs" />
-    <Compile Include="LockMechanism2.cs" />
+    <Compile Include="LockMechanism.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="InnerLock.cs" />
-    <Compile Include="LockMechanism.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
-    <Reference Include="Assembly-CSharp">
+    <Reference Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
       <HintPath>..\..\..\ksp-versions\ksp-1.3.1-dev\KSP_Data\Managed\Assembly-CSharp.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine">
