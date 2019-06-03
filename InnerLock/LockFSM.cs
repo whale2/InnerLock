@@ -57,13 +57,13 @@ namespace InnerLock
 
         public bool canTransit(Event e)
         {
-            return fsm[(int) this.state, (int) e] != null;
+            return fsm[(int) state, (int) e] != null;
         }
         
         public void processEvent(Event e)
         {
-            Debug.Log($"lock FSM: old state: {state}, processing event {e}");
-            Action action = fsm[(int) this.state, (int) e];
+            //Debug.Log($"lock FSM: old state: {state}, processing event {e}");
+            Action action = fsm[(int) state, (int) e];
             if (action != null)
             {
                 action.Invoke();
@@ -72,7 +72,7 @@ namespace InnerLock
 
         private void act(String actionName)
         {
-            Debug.Log($"lock FSM: new state: {state} processing action: {actionName}");
+            //Debug.Log($"lock FSM: new state: {state} processing action: {actionName}");
             Action action;
             if (actionDelegates.TryGetValue(actionName, out action))
             {

@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using UniLinq;
 using UnityEngine;
 
 namespace InnerLock
@@ -10,29 +11,33 @@ namespace InnerLock
     {
         // Runtime parameters
         [KSPField (isPersistant = true)]
-        public uint lockFSMState = 0;
+        public uint lockFSMState;
 
         [KSPField (isPersistant = true)]
-        public uint pairLockPartId = 0;
+        public uint pairLockPartId;
 
         // Config parameters
         [KSPField]
-        public bool canLockToOtherShip = false;
+        public bool canLockToOtherShip;
 
         [KSPField]
-        public bool ecConstantDrain = false;
+        public bool ecConstantDrain;
 
         [KSPField]
         public float ecConsumption = 1f;
 
         [KSPField]
-        public string lockingTo = "lockLatch";
+        public string[] lockingTo = {"lockLatch", "IR_LockConnector"};
+        
+        [KSPField]
+        public string lockTransform = "Body";
+
 
         [KSPField]
         public float lockStrength = 50f;
 
         [KSPField]
-        public float maxOffset = 0.01f;
+        public float maxOffset = 0.05f;
 
         [KSPField]
         public float maxRollDeviation = 0.01f;
@@ -41,15 +46,21 @@ namespace InnerLock
         public string allowedRolls = "0";
 
         [KSPField (isPersistant = true)]
-        public bool isSlave = false;
+        public bool isSlave;
 
         [KSPField (isPersistant = true)]
-        public bool isMaster = false;
+        public bool isMaster;
+
+        [KSPField(isPersistant = true)]
+        public string startLockedStr;
+
+        public bool startLocked;
 
         // Runtime attributes
         public AttachNode attachNode;
         public PartJoint lockJoint;
         public ConfigurableJoint cJoint;
+        public SpringJoint sJoint;
 
         private FXGroup lockSound;
         private FXGroup unlockSound;
@@ -61,22 +72,37 @@ namespace InnerLock
         private Part otherLockPart;
         private LockMechanism otherLock;
 
-        private bool msgPosted = false;
-        
-        public LockMechanism ()
-        {
-        }
+        private bool msgPosted;
 
         public override void OnStart (StartState state)
         {
             base.OnStart (state);
+            printDebug($"startLocked = {startLockedStr}");
+            if (startLockedStr == null)
+            {
+                startLocked = false;
+            }
+            else
+            {
+                startLocked = String.Equals(startLockedStr, "true", StringComparison.OrdinalIgnoreCase);
+            }
+
+            printDebug($"state {state}");
+
+            
             if (state != StartState.Editor) {
                 GameEvents.onVesselGoOffRails.Add (offRails);
                 GameEvents.onVesselGoOnRails.Add (onRails);
                 GameEvents.onPartJointBreak.Add (partJointBreak);
                 GameEvents.onPartDie.Add (partDie);
+                GameEvents.onFlightReady.Add(onFlightReady);
             }
-
+            else
+            {
+                Events["setStartLocked"].active = !startLocked;
+                Events["unsetStartLocked"].active = startLocked;
+            }
+            
             List<float> rolls = new List<float> ();
             foreach (string roll in allowedRolls.Split (',')) {
                 rolls.Add (float.Parse (roll.Trim ()));
@@ -95,12 +121,40 @@ namespace InnerLock
             lockFSM.actionDelegates.Add("Break", defaultPostEventAction);
         }
 
+        public void onFlightReady()
+        {
+            if (vessel.situation== Vessel.Situations.PRELAUNCH)
+            {
+                processPreLaunch(vessel);
+                printDebug("Done processing prelaunch");
+            }
+        }
+        
         public void OnDestroy ()
         {
             GameEvents.onVesselGoOffRails.Remove (offRails);
             GameEvents.onVesselGoOnRails.Remove (onRails);
             GameEvents.onPartJointBreak.Remove (partJointBreak);
             GameEvents.onPartDie.Remove (partDie);
+            GameEvents.onFlightReady.Remove(onFlightReady);
+        }
+        
+        [KSPEvent(guiName = "Start Locked", guiActive = true, guiActiveEditor = true, name = "setStartLocked")]
+        public void setStartLocked()
+        {
+            startLocked = true;
+            Events["setStartLocked"].active = false;
+            Events["unsetStartLocked"].active = true;
+            startLockedStr = "true";
+        }
+
+        [KSPEvent(guiName = "Start Unlocked", guiActive = true, guiActiveEditor = true, name = "unsetStartLocked")]
+        public void unsetStartLocked()
+        {
+            startLocked = false;
+            Events["setStartLocked"].active = true;
+            Events["unsetStartLocked"].active = false;
+            startLockedStr = "false";
         }
 
         // Menu event handler
@@ -166,6 +220,39 @@ namespace InnerLock
             processCounterpart(LockFSM.Event.Unlock);
         }
 
+        public void processPreLaunch(Vessel v)
+        {
+            printDebug($"new vessel: {v}");
+            if (v != part.vessel || !startLocked)
+            {
+                return;
+            }
+
+            // Raycast upright and if there's a lock, create joint
+            Part onLaunchCounterPart = findCounterpartOnLaunch();
+            if (onLaunchCounterPart == null)
+            {
+                lockFSM.state = LockFSM.State.Ready;
+                return;
+            }
+            
+            // check if other part has id greater than ours and LaunchLocked set
+            // if so, we give up setting a lock and submit to slave status
+            printDebug($"Our id: {part.flightID}, theirs id: {onLaunchCounterPart.flightID}");
+            otherLock = (LockMechanism) onLaunchCounterPart.Modules["LockMechanism"];
+            if (onLaunchCounterPart.flightID > part.flightID)
+            {
+                if (otherLock.startLockedStr.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            otherLock.setSlaveLock(part.flightID);
+            pairLockPartId = onLaunchCounterPart.flightID;
+            lockFSM.state = LockFSM.State.Locked;
+        }
+        
         //  Railing and derailing stuff
         public void onRails (Vessel v)
         {
@@ -205,6 +292,68 @@ namespace InnerLock
             defaultPostEventAction();
 
             msgPosted = false;
+        }
+
+        public Part findCounterpartOnLaunch()
+        {
+            // Raycast upwards, return true if there's a lockable part within proper distance and aligned
+            int rayCastMask = 0xFFFF;
+            RaycastHit[] hits = new RaycastHit[5]; // Say, 5 colliders ought to be enough for anyone
+            
+            Transform tf = part.FindModelTransform(lockTransform);
+            
+//            LineRenderer lr = new GameObject ().AddComponent<LineRenderer> ();
+//            lr.material = new Material (Shader.Find ("KSP/Emissive/Diffuse"));
+//            lr.useWorldSpace = true;
+//            lr.material.SetColor ("_EmissiveColor", Color.green);
+//            /*Lr0.startWidth = 0.15f;
+//            Lr0.endWidth = 0.15f;
+//            Lr0.positionCount = 4;*/
+//            lr.SetVertexCount(2);
+//            lr.SetWidth(0.05f,0.05f);
+//            lr.enabled = true;
+//            lr.SetPosition(0, tf.TransformPoint(Vector3.up * upperBound));
+//            lr.SetPosition(1, tf.TransformPoint(Vector3.up));
+
+            float upperBound = findPartUpperBound(tf);
+            printDebug($"upper bound = {upperBound}");
+            
+            int nHits = Physics.RaycastNonAlloc(tf.position,tf.up, hits, upperBound * 1.5f, rayCastMask);
+            printDebug($"Got {nHits} hits");
+            for(int n = 0; n < nHits; n ++)
+            {
+                printDebug($"Got raycast hit {hits[n]}, transform: {hits[n].transform}, GO: {hits[n].transform.gameObject}" +
+                           $"; distance: {hits[n].distance}; collider: {hits[n].collider}");
+                Part hitPart = hits[n].transform.gameObject.GetComponentInParent<Part>();
+                if (hitPart == null)
+                {
+                    printDebug("No part");
+                    continue;
+                }
+                printDebug($"Hit part {hitPart}; id={hitPart.flightID}");
+                if (hitPart.flightID == part.flightID)
+                {
+                    printDebug("Got hit to ourselves");
+                    continue;
+                }
+                // Check if it is a lockable part at all
+                if (!lockingTo.Any(hitPart.partInfo.name.Replace(".","_").Contains))
+                {
+                    printDebug("Part could not be locked to");
+                    continue;
+                }
+                printDebug("Part could be locked to");
+                // Ok, we can lock to it. Check alignment
+                if (!checkRollAndDot(hitPart, upperBound))
+                {
+                    printDebug("Part not aligned");
+                    return null;
+                }
+    
+                printDebug($"Parts aligned, returning {hitPart}");
+                return hitPart;
+                }
+            return null;
         }
         
         // Collision processing
@@ -246,7 +395,7 @@ namespace InnerLock
                 continue;
         
                 // Check if it is properly aligned 
-                if (!checkRollAndDot(otherLockPart))
+                if (!checkRollAndDot(otherLockPart, maxOffset))
                 continue;
 
                 return true;
@@ -261,7 +410,10 @@ namespace InnerLock
                 return false;
             }
 
-            if (!otherPart.name.Replace('.','_').Equals (lockingTo.Replace('.','_'))) {
+            if(!lockingTo.Any(otherPart.partInfo.name.Replace(".","_").Contains))
+            //if (lockingTo.Any(s => otherPart.name.Replace('.','_').Equals(s.Replace('.','_')))) 
+            {
+            //if (!otherPart.name.Replace('.','_').Equals (lockingTo.Replace('.','_'))) {
                 return false;
             }
 
@@ -274,7 +426,7 @@ namespace InnerLock
         }
 
         // Check if other half is properly aligned 
-        private bool checkRollAndDot(Part otherPart) {
+        private bool checkRollAndDot(Part otherPart, float maxDistance) {
 
             float dotup = Vector3.Dot (otherPart.transform.up, transform.up);
             float dotfwd = Vector3.Dot (otherPart.transform.forward, transform.forward);
@@ -282,7 +434,7 @@ namespace InnerLock
                 Vector3.ProjectOnPlane (transform.position, transform.up), 
                 Vector3.ProjectOnPlane (otherPart.transform.position, transform.up));
 
-            bool aligned = !(-dotup < maxRollDeviation || offset > maxOffset);
+            bool aligned = !(-dotup < maxRollDeviation || offset > maxDistance);
 
             foreach (float roll in allowedRolls) {
                 if (Math.Abs (dotfwd - roll) < maxRollDeviation) {
@@ -395,7 +547,17 @@ namespace InnerLock
             cJoint.projectionDistance = 0f;
             cJoint.targetPosition = latch.transform.position;
             cJoint.anchor = part.transform.position;
-            
+
+            // FIXME: Spring or Fixed?
+            sJoint = part.parent.gameObject.AddComponent<SpringJoint>();
+            sJoint.damper = lockStrength / 2f;
+            sJoint.maxDistance = 0;
+            sJoint.minDistance = 0;
+            sJoint.spring = lockStrength * 10f;
+            sJoint.tolerance = 0.005f;
+            sJoint.connectedBody = latch.parent.GetComponent<Rigidbody>();
+                
+                
             printDebug($"Created configurable joint with id={cJoint.GetInstanceID()}; joint={cJoint}");
         
             Vector3 normDir = (part.transform.position - latch.transform.position).normalized;
@@ -503,6 +665,7 @@ namespace InnerLock
                 lockJoint.DestroyJoint();
                 part.attachNodes.Remove(attachNode);
                 DestroyImmediate(cJoint);
+                DestroyImmediate(sJoint);
                 
                 if (attachNode != null) {
                     //part.attachNodes.Remove (attachNode);
@@ -516,6 +679,7 @@ namespace InnerLock
             //lockJoint = null;
             attachNode = null;
             cJoint = null;
+            sJoint = null;
             lockJoint = null;
             isMaster = false;
             isSlave = false;
@@ -534,6 +698,9 @@ namespace InnerLock
             
             lockJoint.DestroyJoint();
             DestroyImmediate(cJoint);
+            DestroyImmediate(sJoint);
+            cJoint = null;
+            sJoint = null;
             part.attachNodes.Remove(attachNode);
             attachNode.owner = null;
             // Seems like we just got separated from the vessel.
@@ -603,6 +770,9 @@ namespace InnerLock
                     Events["eventUnlock"].active = false;
                     break;
             }
+
+            Events["setStartLocked"].active = HighLogic.LoadedSceneIsEditor;
+            Events["unsetStartLocked"].active = HighLogic.LoadedSceneIsEditor;
         }
         
         private void processCounterpart(LockFSM.Event fsmEvent)
@@ -663,6 +833,27 @@ namespace InnerLock
             return fXGroup;
         }
 
+        internal float findPartUpperBound(Transform tr)
+        {
+            List<Mesh> meshes = new List<Mesh>();
+            tr.GetComponentsInChildren<MeshFilter>().ToList().ForEach(mf => meshes.Add(mf.mesh));
+            //tr.GetComponentsInChildren<MeshCollider>().ToList().ForEach(mc => meshes.Add(mc.sharedMesh));
+
+            float bound = 0.0f;
+            foreach (var mesh in meshes)
+            {
+                foreach (Vector3 vert in mesh.vertices)
+                {
+                    if (vert.y > bound)
+                    {
+                        bound = vert.y;
+                    }
+                }
+            }
+
+            return bound;
+        }
+        
         internal void printDebug(String message) {
 
             StackTrace trace = new StackTrace ();

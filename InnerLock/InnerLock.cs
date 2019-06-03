@@ -1,6 +1,4 @@
-﻿using System;
-using UnityEngine;
-using System.Collections.Generic;
+﻿using UnityEngine;
 
 namespace InnerLock
 {
@@ -8,10 +6,10 @@ namespace InnerLock
 	{
 
 		[KSPField (isPersistant = true)]
-		public bool isActiveForAll = false;
+		public bool isActiveForAll;
 
 		[KSPField (isPersistant = true)]
-		public bool isPermaLock = false;
+		public bool isPermaLock;
 
 		[KSPField (isPersistant = true)]
 		public bool isSwitchable = true;
@@ -19,17 +17,13 @@ namespace InnerLock
 		private EventVoid onWorldStabilizationStartEvent;
 		private EventVoid onWorldStabilizedEvent;
 
-		private int framesToEnforce = 0;
+		private int framesToEnforce;
 		private int ticks = 3000;
-		private int totalFrames = 0;
+		private int totalFrames;
 
 		//private List<Vessel> vesselsToUpdate;
 
-		private bool worldStabilizationInProgress = false;
-
-		public InnerLock ()
-		{
-		}
+		private bool worldStabilizationInProgress;
 
 		[KSPEvent (guiName = "Disable All Internal Collisions", guiActive = false, guiActiveEditor = true, name = "disableIntraCollisions")]
 		public void disableIntraCollisions ()
@@ -47,12 +41,12 @@ namespace InnerLock
 			Events ["disableIntraCollisions"].active = true;
 		}
 
-		public override void OnStart (PartModule.StartState state)
+		public override void OnStart (StartState state)
 		{
 			base.OnStart (state);
 			if (state == StartState.Editor && isSwitchable) {
-				base.Events ["enableIntraCollisions"].active = !isActiveForAll;
-				base.Events ["disableIntraCollisions"].active = isActiveForAll;
+				Events ["enableIntraCollisions"].active = !isActiveForAll;
+				Events ["disableIntraCollisions"].active = isActiveForAll;
 			}
 			else {
 				GameEvents.onVesselCreate.Add (EnqueueVessel);
@@ -68,7 +62,7 @@ namespace InnerLock
 				
 				onWorldStabilizedEvent = GameEvents.FindEvent<EventVoid> ("onWorldStabilized");
 				if (onWorldStabilizedEvent != null)
-					this.onWorldStabilizedEvent.Add (onWorldStabilized);
+					onWorldStabilizedEvent.Add (onWorldStabilized);
 			}
 		}
 
@@ -102,7 +96,7 @@ namespace InnerLock
 		public void EnqueueVessel (Vessel v)
 		{
 			totalFrames = 0;
-			framesToEnforce = (int)((float)this.ticks * Time.deltaTime);
+			framesToEnforce = (int)(ticks * Time.deltaTime);
 		}
 
 		public void EnqueueVoid ()
