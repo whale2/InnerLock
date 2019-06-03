@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using UniLinq;
 using UnityEngine;
+using Object = System.Object;
 
 namespace InnerLock
 {
@@ -239,17 +240,31 @@ namespace InnerLock
             // check if other part has id greater than ours and LaunchLocked set
             // if so, we give up setting a lock and submit to slave status
             printDebug($"Our id: {part.flightID}, theirs id: {onLaunchCounterPart.flightID}");
-            otherLock = (LockMechanism) onLaunchCounterPart.Modules["LockMechanism"];
-            if (onLaunchCounterPart.flightID > part.flightID)
+            // Check for genderless locking
+            if (part.name == onLaunchCounterPart.name && onLaunchCounterPart.Modules.Contains("LockMechanism"))
             {
-                if (otherLock.startLockedStr.Equals("true", StringComparison.OrdinalIgnoreCase))
+                otherLock = (LockMechanism) onLaunchCounterPart.Modules["LockMechanism"];
+                // Check if we would be a slave lock 
+                if (onLaunchCounterPart.flightID > part.flightID)
                 {
-                    return;
+                    if (otherLock.startLockedStr.Equals("true", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Lock should be set by other part
+                        return;
+                    }
+                    otherLock.isMaster = true;
+                    setSlaveLock(onLaunchCounterPart.flightID);
                 }
+                else
+                {
+                    isMaster = true;
+                    otherLock.setSlaveLock(part.flightID);
+                }
+                // Setting lock ourselves
+                pairLockPartId = onLaunchCounterPart.flightID;
+                otherLock.lockFSM.state = LockFSM.State.Locked;
+             
             }
-
-            otherLock.setSlaveLock(part.flightID);
-            pairLockPartId = onLaunchCounterPart.flightID;
             lockFSM.state = LockFSM.State.Locked;
         }
         
@@ -549,15 +564,21 @@ namespace InnerLock
             cJoint.anchor = part.transform.position;
 
             // FIXME: Spring or Fixed?
-            sJoint = part.parent.gameObject.AddComponent<SpringJoint>();
-            sJoint.damper = lockStrength / 2f;
-            sJoint.maxDistance = 0;
-            sJoint.minDistance = 0;
-            sJoint.spring = lockStrength * 10f;
-            sJoint.tolerance = 0.005f;
-            sJoint.connectedBody = latch.parent.GetComponent<Rigidbody>();
-                
-                
+            try
+            {
+                sJoint = part.parent.gameObject.AddComponent<SpringJoint>();
+                sJoint.damper = lockStrength / 2f;
+                sJoint.maxDistance = 0;
+                sJoint.minDistance = 0;
+                sJoint.spring = lockStrength * 10f;
+                sJoint.tolerance = 0.005f;
+                sJoint.connectedBody = latch.parent.GetComponent<Rigidbody>();
+            }
+            catch (NullReferenceException)
+            {
+                // in case one of the parents doesn't exist
+            }
+
             printDebug($"Created configurable joint with id={cJoint.GetInstanceID()}; joint={cJoint}");
         
             Vector3 normDir = (part.transform.position - latch.transform.position).normalized;
@@ -660,12 +681,15 @@ namespace InnerLock
                 lockFSM.processEvent(LockFSM.Event.Release);
             }
             
-            if (lockJoint != null) {
+            if ((Object)lockJoint != null) {
                 printDebug ("destroying joint");
                 lockJoint.DestroyJoint();
                 part.attachNodes.Remove(attachNode);
                 DestroyImmediate(cJoint);
-                DestroyImmediate(sJoint);
+                if ((Object)sJoint != null)
+                {
+                    DestroyImmediate(sJoint);
+                }
                 
                 if (attachNode != null) {
                     //part.attachNodes.Remove (attachNode);
@@ -698,7 +722,11 @@ namespace InnerLock
             
             lockJoint.DestroyJoint();
             DestroyImmediate(cJoint);
-            DestroyImmediate(sJoint);
+            if ((Object)sJoint != null)
+            {
+                DestroyImmediate(sJoint);
+            }
+
             cJoint = null;
             sJoint = null;
             part.attachNodes.Remove(attachNode);
