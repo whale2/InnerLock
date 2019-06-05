@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using UniLinq;
 using UnityEngine;
-using Object = System.Object;
 
 namespace InnerLock
 {
@@ -33,7 +32,6 @@ namespace InnerLock
         [KSPField]
         public string lockTransform = "Body";
 
-
         [KSPField]
         public float lockStrength = 50f;
 
@@ -57,6 +55,8 @@ namespace InnerLock
 
         public bool startLocked;
 
+        public int debugLevel = 0;
+
         // Runtime attributes
         public AttachNode attachNode;
         public PartJoint lockJoint;
@@ -74,10 +74,13 @@ namespace InnerLock
         private LockMechanism otherLock;
 
         private bool msgPosted;
+        private bool jointJustCreated = false;
 
         public override void OnStart (StartState state)
         {
             base.OnStart (state);
+            configure();
+
             printDebug($"startLocked = {startLockedStr}");
             if (startLockedStr == null)
             {
@@ -241,7 +244,7 @@ namespace InnerLock
             // if so, we give up setting a lock and submit to slave status
             printDebug($"Our id: {part.flightID}, theirs id: {onLaunchCounterPart.flightID}");
             // Check for genderless locking
-            if (part.name == onLaunchCounterPart.name && onLaunchCounterPart.Modules.Contains("LockMechanism"))
+            if (isLockablePart(onLaunchCounterPart) && onLaunchCounterPart.Modules.Contains("LockMechanism"))
             {
                 otherLock = (LockMechanism) onLaunchCounterPart.Modules["LockMechanism"];
                 // Check if we would be a slave lock 
@@ -300,6 +303,7 @@ namespace InnerLock
                     if ((isMaster || isSlave) && otherLockPart.Modules.Contains ("LockMechanism")) {
                         otherLock = (LockMechanism)otherLockPart.Modules ["LockMechanism"];
                     }
+                    jointJustCreated = false;
                     lockHasp (otherLockPart);
                 }
             }
@@ -316,23 +320,32 @@ namespace InnerLock
             RaycastHit[] hits = new RaycastHit[5]; // Say, 5 colliders ought to be enough for anyone
             
             Transform tf = part.FindModelTransform(lockTransform);
-            
-//            LineRenderer lr = new GameObject ().AddComponent<LineRenderer> ();
-//            lr.material = new Material (Shader.Find ("KSP/Emissive/Diffuse"));
-//            lr.useWorldSpace = true;
-//            lr.material.SetColor ("_EmissiveColor", Color.green);
-//            /*Lr0.startWidth = 0.15f;
-//            Lr0.endWidth = 0.15f;
-//            Lr0.positionCount = 4;*/
-//            lr.SetVertexCount(2);
-//            lr.SetWidth(0.05f,0.05f);
-//            lr.enabled = true;
-//            lr.SetPosition(0, tf.TransformPoint(Vector3.up * upperBound));
-//            lr.SetPosition(1, tf.TransformPoint(Vector3.up));
 
             float upperBound = findPartUpperBound(tf);
             printDebug($"upper bound = {upperBound}");
             
+            if (debugLevel > 1)
+            {
+                // Debug visual for raycast
+                LineRenderer lr = new GameObject ().AddComponent<LineRenderer> ();
+                lr.material = new Material (Shader.Find ("KSP/Emissive/Diffuse"));
+                lr.useWorldSpace = true;
+                lr.material.SetColor ("_EmissiveColor", Color.green);
+                
+#if (KSP_151 || KSP_161 || KSP_171)
+                lr.positionCount = 2;
+                lr.startWidth = 0.05f;
+                lr.endWidth = 0.05f;
+#else
+                lr.SetVertexCount(2);
+                lr.SetWidth(0.05f,0.05f);
+#endif
+                
+                lr.enabled = true;
+                lr.SetPosition(0, tf.position);
+                lr.SetPosition(1, tf.up * upperBound * 1.5f);
+            }
+
             int nHits = Physics.RaycastNonAlloc(tf.position,tf.up, hits, upperBound * 1.5f, rayCastMask);
             printDebug($"Got {nHits} hits");
             for(int n = 0; n < nHits; n ++)
@@ -352,7 +365,7 @@ namespace InnerLock
                     continue;
                 }
                 // Check if it is a lockable part at all
-                if (!lockingTo.Any(hitPart.partInfo.name.Replace(".","_").Contains))
+                if (!isLockablePart(hitPart))
                 {
                     printDebug("Part could not be locked to");
                     continue;
@@ -369,6 +382,11 @@ namespace InnerLock
                 return hitPart;
                 }
             return null;
+        }
+
+        private bool isLockablePart(Part otherPart)
+        {
+            return lockingTo.Any(otherPart.partInfo.name.Replace(".", "_").Contains);
         }
         
         // Collision processing
@@ -425,10 +443,8 @@ namespace InnerLock
                 return false;
             }
 
-            if(!lockingTo.Any(otherPart.partInfo.name.Replace(".","_").Contains))
-            //if (lockingTo.Any(s => otherPart.name.Replace('.','_').Equals(s.Replace('.','_')))) 
+            if(!isLockablePart(otherPart))
             {
-            //if (!otherPart.name.Replace('.','_').Equals (lockingTo.Replace('.','_'))) {
                 return false;
             }
 
@@ -483,7 +499,7 @@ namespace InnerLock
             // what it takes to lock the latch
             if (lockFSM.state == LockFSM.State.Locking)
             {
-    #if (KSP_151 || KSP_161)
+    #if (KSP_151 || KSP_161 || KSP_171)
                 float num = (float)part.RequestResource("ElectricCharge", (double) (new decimal(ecConsumption)));
     #else
                 float num = part.RequestResource ("ElectricCharge", ecConsumption);              
@@ -494,7 +510,7 @@ namespace InnerLock
                 }
                 isSlave = false;
                 // If we use genderless locking, tell the other part that we are leading
-                if (latch.name == part.name && latch.Modules.Contains ("LockMechanism")) {
+                if (isLockablePart(latch) && latch.Modules.Contains ("LockMechanism")) {
                     // Both locks could be primed. In that case assign master status
                     // to the part with lesser flightID
                     otherLock = (LockMechanism)latch.Modules ["LockMechanism"];
@@ -564,19 +580,26 @@ namespace InnerLock
             cJoint.anchor = part.transform.position;
 
             // FIXME: Spring or Fixed?
-            try
+            printDebug($"sJoint: {sJoint}");
+            if (sJoint == null)
             {
-                sJoint = part.parent.gameObject.AddComponent<SpringJoint>();
-                sJoint.damper = lockStrength / 2f;
-                sJoint.maxDistance = 0;
-                sJoint.minDistance = 0;
-                sJoint.spring = lockStrength * 10f;
-                sJoint.tolerance = 0.005f;
-                sJoint.connectedBody = latch.parent.GetComponent<Rigidbody>();
-            }
-            catch (NullReferenceException)
-            {
-                // in case one of the parents doesn't exist
+                try
+                {
+                    sJoint = part.parent.gameObject.AddComponent<SpringJoint>();
+                    sJoint.damper = lockStrength / 2f;
+                    sJoint.maxDistance = 0;
+                    sJoint.minDistance = 0;
+                    sJoint.spring = lockStrength * 10f;
+                    sJoint.tolerance = 0.005f;
+                    sJoint.connectedBody = latch.parent.GetComponent<Rigidbody>();
+                }
+                catch (NullReferenceException)
+                {
+                    // in case one of the parents doesn't exist
+                    printDebug("Failed to create spring joint");
+                    sJoint = null;
+                }
+                printDebug($"Created spring joint {sJoint}");
             }
 
             printDebug($"Created configurable joint with id={cJoint.GetInstanceID()}; joint={cJoint}");
@@ -617,17 +640,21 @@ namespace InnerLock
 				yield break;
 			}
 
+            printDebug($"A - fsm state={lockFSM.state}, justCreated={jointJustCreated}");
+
 		    // At this point the latch could have slipped, because we waited for some time.
 		    // Check if FSM state is still "locking"
-		    if (lockFSM.state != LockFSM.State.Locking && lockFSM.state != LockFSM.State.Locked)
+		    if ((lockFSM.state != LockFSM.State.Locking && lockFSM.state != LockFSM.State.Locked) || jointJustCreated)
 		    {
-		        printDebug("Latch slipped while locking. Aborting lock.");
+		        printDebug("Latch slipped while locking or already locked. Aborting lock.");
 		        yield break;
 		    }
 		    
 			if (!isSlave) {
 				
+                printDebug($"B - fsm state={lockFSM.state}, justCreated={jointJustCreated}");
 			    createAttachNode(latch);
+                jointJustCreated = true;
 				printDebug ("locked");
 				if (lockFSM.state == LockFSM.State.Locking)
 					ScreenMessages.PostScreenMessage ("Latch locked");
@@ -681,15 +708,11 @@ namespace InnerLock
                 lockFSM.processEvent(LockFSM.Event.Release);
             }
             
-            if ((Object)lockJoint != null) {
-                printDebug ("destroying joint");
+            if (lockJoint != null) {
+                printDebug ($"destroying lock joint");
                 lockJoint.DestroyJoint();
                 part.attachNodes.Remove(attachNode);
                 DestroyImmediate(cJoint);
-                if ((Object)sJoint != null)
-                {
-                    DestroyImmediate(sJoint);
-                }
                 
                 if (attachNode != null) {
                     //part.attachNodes.Remove (attachNode);
@@ -700,6 +723,12 @@ namespace InnerLock
                     attachNode, lockJoint));
             }
 
+            printDebug($"sJoint: {sJoint}");
+            if (sJoint != null)
+            {
+                DestroyImmediate(sJoint);
+            }
+
             //lockJoint = null;
             attachNode = null;
             cJoint = null;
@@ -708,6 +737,7 @@ namespace InnerLock
             isMaster = false;
             isSlave = false;
             pairLockPartId = 0;
+            jointJustCreated = false;
         }
 
         public void partJointBreak(PartJoint joint, float breakForce) {
@@ -722,13 +752,14 @@ namespace InnerLock
             
             lockJoint.DestroyJoint();
             DestroyImmediate(cJoint);
-            if ((Object)sJoint != null)
+            if (sJoint != null)
             {
                 DestroyImmediate(sJoint);
             }
 
             cJoint = null;
             sJoint = null;
+            jointJustCreated = false;
             part.attachNodes.Remove(attachNode);
             attachNode.owner = null;
             // Seems like we just got separated from the vessel.
@@ -881,8 +912,25 @@ namespace InnerLock
 
             return bound;
         }
-        
+
+        private void configure()
+        {
+
+            // FIXME: How do I use KSPField here for configuration? 
+
+            var config = GameDatabase.Instance.GetConfigs("InnerLock").FirstOrDefault().config;
+
+            string nodeValue = config.GetValue("debugLevel");
+            if (nodeValue != null)
+                debugLevel = Int32.Parse(nodeValue);
+        }
+
         internal void printDebug(String message) {
+
+            if (debugLevel == 0)
+            {
+                return;
+            }
 
             StackTrace trace = new StackTrace ();
             String caller = trace.GetFrame(1).GetMethod ().Name;
