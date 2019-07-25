@@ -3,7 +3,7 @@
 PROJECT="InnerLock"
 KSP_BASE="${HOME}/ksp-versions"
 
-TARGETS="1.3.1 1.5.1 1.6.1 1.7.1"
+TARGETS="1.3.1 1.5.1 1.6.1 1.7.3"
 
 PROJECT_VERSION=$(cat GameData/${PROJECT}/$PROJECT.version|jq '.VERSION.MAJOR,.VERSION.MINOR,.VERSION.PATCH'|tr '\n' '.'|sed -e s'/\.$//')
 

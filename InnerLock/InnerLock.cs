@@ -44,9 +44,18 @@ namespace InnerLock
 		public override void OnStart (StartState state)
 		{
 			base.OnStart (state);
-			if (state == StartState.Editor && isSwitchable) {
-				Events ["enableIntraCollisions"].active = !isActiveForAll;
-				Events ["disableIntraCollisions"].active = isActiveForAll;
+			if (state == StartState.Editor)
+			{
+				if (isSwitchable)
+				{
+					Events["enableIntraCollisions"].active = !isActiveForAll;
+					Events["disableIntraCollisions"].active = isActiveForAll;
+				}
+				else
+				{
+					Events["enableIntraCollisions"].active = false;
+					Events["disableIntraCollisions"].active = false;
+				}
 			}
 			else {
 				GameEvents.onVesselCreate.Add (EnqueueVessel);

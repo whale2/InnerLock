@@ -36,7 +36,10 @@ namespace InnerLock
         public float lockStrength = 50f;
 
         [KSPField]
-        public float maxOffset = 0.05f;
+        public float maxOffset = 0.01f;
+
+        [KSPField]
+        public float maxGap = 0.11f;
 
         [KSPField]
         public float maxRollDeviation = 0.01f;
@@ -372,7 +375,8 @@ namespace InnerLock
                 }
                 printDebug("Part could be locked to");
                 // Ok, we can lock to it. Check alignment
-                if (!checkRollAndDot(hitPart, upperBound))
+                
+                if (!checkRollAndDot(hitPart))
                 {
                     printDebug("Part not aligned");
                     return null;
@@ -386,7 +390,29 @@ namespace InnerLock
 
         private bool isLockablePart(Part otherPart)
         {
-            return lockingTo.Any(otherPart.partInfo.name.Replace(".", "_").Contains);
+            if (! lockingTo.Any(otherPart.partInfo.name.Replace(".", "_").Contains))
+            {
+                return false;
+            }
+            
+            // Check if both halves have same scale
+            if (!part.Modules.Contains("TweakScale"))
+            {
+                return true;
+            }
+
+            if (!otherPart.Modules.Contains("TweakScale"))
+            {
+                return false;
+            }
+
+            PartModule tweakScale = part.Modules["TweakScale"];
+            float scale = tweakScale.Fields["currentScale"].GetValue<float>(tweakScale);
+            
+            PartModule otherTweakScale = otherPart.Modules["TweakScale"];
+            float otherScale = otherTweakScale.Fields["currentScale"].GetValue<float>(tweakScale);
+            
+            return Math.Abs(scale - otherScale) < 0.1f;
         }
         
         // Collision processing
@@ -428,7 +454,7 @@ namespace InnerLock
                 continue;
         
                 // Check if it is properly aligned 
-                if (!checkRollAndDot(otherLockPart, maxOffset))
+                if (!checkRollAndDot(otherLockPart))
                 continue;
 
                 return true;
@@ -457,15 +483,18 @@ namespace InnerLock
         }
 
         // Check if other half is properly aligned 
-        private bool checkRollAndDot(Part otherPart, float maxDistance) {
+        private bool checkRollAndDot(Part otherPart) {
 
             float dotup = Vector3.Dot (otherPart.transform.up, transform.up);
             float dotfwd = Vector3.Dot (otherPart.transform.forward, transform.forward);
             float offset = Vector3.Distance (
                 Vector3.ProjectOnPlane (transform.position, transform.up), 
                 Vector3.ProjectOnPlane (otherPart.transform.position, transform.up));
+            float gap = Vector3.Distance(
+                    Vector3.ProjectOnPlane (transform.position, transform.forward), 
+                    Vector3.ProjectOnPlane (otherPart.transform.position, transform.forward));
 
-            bool aligned = !(-dotup < maxRollDeviation || offset > maxDistance);
+            bool aligned = !(-dotup < maxRollDeviation || offset > maxOffset || gap > maxGap);
 
             foreach (float roll in allowedRolls) {
                 if (Math.Abs (dotfwd - roll) < maxRollDeviation) {
@@ -473,10 +502,11 @@ namespace InnerLock
                     break;
                 }
             }
+            printDebug ($"dotup = {dotup}; dotfwd = {dotfwd}; offset = {offset}; gap = {gap}");
+            printDebug($"maxOffset = {maxOffset}; maxGap = {maxGap}; rollDeviation (dotfwd/dotup) = {maxRollDeviation}");
 
             if (!aligned) {
                 if (!msgPosted) {
-                    printDebug ("dotup = " + dotup + "; dotfwd = " + dotfwd + "; offset = " + offset);
                     ScreenMessages.PostScreenMessage ("Latch not aligned - can't lock");
                     msgPosted = true;
                 }
@@ -506,6 +536,7 @@ namespace InnerLock
     #endif
                 if (num < ecConsumption) {
                     ScreenMessages.PostScreenMessage ("Not enough electric charge to lock the hasp!");
+                    printDebug($"request ec res = {num}");
                     return;
                 }
                 isSlave = false;
