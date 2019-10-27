@@ -335,7 +335,7 @@ namespace InnerLock
                 lr.useWorldSpace = true;
                 lr.material.SetColor ("_EmissiveColor", Color.green);
                 
-#if (KSP_151 || KSP_161 || KSP_171)
+#if (KSP_151 || KSP_161 || KSP_173)
                 lr.positionCount = 2;
                 lr.startWidth = 0.05f;
                 lr.endWidth = 0.05f;
@@ -529,7 +529,7 @@ namespace InnerLock
             // what it takes to lock the latch
             if (lockFSM.state == LockFSM.State.Locking)
             {
-    #if (KSP_151 || KSP_161 || KSP_171)
+    #if (KSP_151 || KSP_161 || KSP_173)
                 float num = (float)part.RequestResource("ElectricCharge", (double) (new decimal(ecConsumption)));
     #else
                 float num = part.RequestResource ("ElectricCharge", ecConsumption);              
